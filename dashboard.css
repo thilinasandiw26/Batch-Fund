@@ -21,7 +21,11 @@ a { color: var(--primary); }
 .brand { color: var(--ink); }
 .brand strong { color: var(--ink); }
 .brand small { color: var(--muted); opacity: 1; }
-.logo { background: var(--primary); color: #fff; }
+.logo {
+  width: 44px; height: 44px; border-radius: 0;
+  background: url("logo.png") center / contain no-repeat;
+  color: transparent; font-size: 0;       /* hides the ₿F text, shows the picture */
+}
 .sidebar nav a { color: #344054; }
 .sidebar nav a:hover { background: #f1f3f6; color: var(--ink); text-decoration: none; }
 .sidebar nav a.active { background: var(--primary); color: #fff; }
