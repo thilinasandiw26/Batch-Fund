@@ -1,10 +1,4 @@
 <?php
-/**
- * actions.php – all backend operations, selected by ?action= / POST action=.
- * Every action is authorised on the server (role + record ownership) and every POST is CSRF-checked.
- *
- * Owners:  M1 students/account | M2 collections | M3 payments/receipts | M4 expenses/export | M5 communication
- */
 require_once __DIR__ . '/auth.php';
 
 $user = current_user();
@@ -12,23 +6,17 @@ if (!$user) { flash('error', 'Please log in to continue.'); redirect('index.php'
 
 $action = (string)($_POST['action'] ?? $_GET['action'] ?? '');
 
-// action => allowed role ('any' = either), method
 $routes = [
     'change_password' => ['any', 'POST'],
-    // M1
     'add_student' => ['coordinator', 'POST'], 'update_student' => ['coordinator', 'POST'], 'toggle_student' => ['coordinator', 'POST'],
     'reset_password' => ['coordinator', 'POST'], 'delete_student' => ['coordinator', 'POST'],
-    // M2
     'create_collection' => ['coordinator', 'POST'], 'create_event' => ['coordinator', 'POST'], 'update_collection' => ['coordinator', 'POST'],
     'close_collection' => ['coordinator', 'POST'], 'reopen_collection' => ['coordinator', 'POST'],
-    // M3
     'submit_payment' => ['student', 'POST'], 'start_review' => ['coordinator', 'POST'], 'approve_payment' => ['coordinator', 'POST'],
     'reject_payment' => ['coordinator', 'POST'], 'download_receipt' => ['any', 'GET'],
-    // M4
     'add_expense' => ['coordinator', 'POST'], 'update_expense' => ['coordinator', 'POST'], 'delete_expense' => ['coordinator', 'POST'],
     'approve_expense' => ['coordinator', 'POST'], 'reject_expense' => ['coordinator', 'POST'], 'delete_expense_doc' => ['coordinator', 'POST'],
     'download_expense_doc' => ['any', 'GET'], 'export_csv' => ['coordinator', 'GET'],
-    // M5
     'send_reminder' => ['coordinator', 'POST'], 'send_bulk_reminders' => ['coordinator', 'POST'],
     'create_announcement' => ['coordinator', 'POST'], 'update_announcement' => ['coordinator', 'POST'], 'delete_announcement' => ['coordinator', 'POST'],
     'publish_announcement' => ['coordinator', 'POST'], 'unpublish_announcement' => ['coordinator', 'POST'],
@@ -55,13 +43,9 @@ try {
 }
 redirect(safe_return($defaultReturn));
 
-/* ---------- small helper: stop with an error message ---------- */
 function fail(string $msg): void { flash('error', $msg); redirect(safe_return(home_for(current_user()['role']))); }
 function check_errors(array $errors): void { if ($errors) fail(implode(' ', $errors)); }
 
-/* =====================================================================
- * SHARED
- * ===================================================================== */
 function act_change_password(array $u): void {
     $row = row('SELECT password FROM users WHERE user_id = ?', [$u['user_id']]);
     $new = (string)($_POST['new_password'] ?? '');
@@ -73,9 +57,6 @@ function act_change_password(array $u): void {
     flash('success', 'Password updated.');
 }
 
-/* =====================================================================
- * MEMBER 1 – STUDENTS
- * ===================================================================== */
 function student_input(?int $studentId, ?int $userId): array {
     $d = ['name' => post_str('full_name', 120), 'email' => strtolower(post_str('email', 150)),
           'reg' => strtoupper(post_str('reg_no', 30)), 'contact' => post_str('contact_no', 20), 'district' => post_str('district', 60),'degree' => post_str('degree', 100)];
@@ -144,15 +125,12 @@ function act_delete_student(array $u): void {
     $s = row('SELECT user_id FROM students WHERE student_id = ?', [$sid]);
     if (!$s) fail('Student not found.');
     if (val('SELECT COUNT(*) FROM payments WHERE student_id = ?', [$sid])) fail('This student has payment records and cannot be deleted. Deactivate the account instead.');
-    q('DELETE FROM users WHERE user_id = ?', [$s['user_id']]);   // cascades to students
+    q('DELETE FROM users WHERE user_id = ?', [$s['user_id']]);
     audit('delete_student', 'student', $sid);
     flash('success', 'Student deleted.');
     redirect('coordinator.php?page=students');
 }
 
-/* =====================================================================
- * MEMBER 2 – COLLECTIONS & EVENTS
- * ===================================================================== */
 function collection_input(string $kind): array {
     $d = ['title' => post_str('title', 150), 'description' => post_text('description', 1000), 'amount' => post_amount('amount'),
           'deadline' => (string)($_POST['deadline'] ?? ''), 'month' => null, 'event_date' => null, 'target' => null];
@@ -206,11 +184,8 @@ function set_collection_status(string $status): void {
     flash('success', 'Collection ' . $status . '.');
 }
 
-/* =====================================================================
- * MEMBER 3 – PAYMENTS
- * ===================================================================== */
 function act_submit_payment(array $u): void {
-    $sid = (int)$u['student_id'];                      // always from the session, never from the form
+    $sid = (int)$u['student_id'];
     $cid = post_int('collection_id');
     $c = row('SELECT * FROM collections WHERE collection_id = ?', [$cid]);
     if (!$c) fail('Collection not found.');
@@ -228,7 +203,7 @@ function act_submit_payment(array $u): void {
     if (!$ok) fail($file);
     try {
         db()->beginTransaction();
-        if ($existing) {            // resubmission of a rejected payment
+        if ($existing) {
             $upd = q("UPDATE payments SET amount=?, reference_no=?, status='receipt_submitted', attempt_no=attempt_no+1, rejection_reason=NULL,
                       reviewed_by=NULL, reviewed_at=NULL, submitted_at=NOW() WHERE payment_id=? AND student_id=? AND status='rejected'",
                      [$amount, $ref, $existing['payment_id'], $sid]);
@@ -267,7 +242,7 @@ function act_start_review(array $u): void {
 function act_approve_payment(array $u): void {
     $p = load_payment_for_review();
     db()->beginTransaction();
-    $locked = row('SELECT status FROM payments WHERE payment_id = ? FOR UPDATE', [$p['payment_id']]);   // prevents double approval
+    $locked = row('SELECT status FROM payments WHERE payment_id = ? FOR UPDATE', [$p['payment_id']]);
     if (!in_array($locked['status'], ['receipt_submitted', 'under_verification'], true)) { db()->rollBack(); fail('This payment has already been processed.'); }
     q("UPDATE payments SET status='approved', reviewed_by=?, reviewed_at=NOW(), rejection_reason=NULL WHERE payment_id=?", [$u['user_id'], $p['payment_id']]);
     audit('approve_payment', 'payment', (int)$p['payment_id'], money($p['amount']) . ' – ' . $p['title']);
@@ -295,9 +270,6 @@ function act_download_receipt(array $u): void {
     serve_file($r['stored_name'], $r['mime_type'], $r['original_name']);
 }
 
-/* =====================================================================
- * MEMBER 4 – EXPENSES & EXPORT
- * ===================================================================== */
 function expense_input(): array {
     $cats = expense_categories();
     $d = ['title' => post_str('title', 150), 'description' => post_text('description', 1000), 'category' => post_str('category', 50),
@@ -339,7 +311,7 @@ function act_update_expense(array $u): void {
     if (!$old) fail('Expense not found.');
     $d = expense_input();
     $status = $old['status'];
-    if (EXPENSE_APPROVAL_REQUIRED && $status === 'approved') $status = 'pending';   // edits to approved expenses need re-approval
+    if (EXPENSE_APPROVAL_REQUIRED && $status === 'approved') $status = 'pending';
     db()->beginTransaction();
     q('UPDATE expenses SET title=?, description=?, category=?, amount=?, expense_date=?, collection_id=?, status=?, approved_by=NULL, approved_at=NULL WHERE expense_id=?',
       [$d['title'], $d['description'], $d['category'], $d['amount'], $d['date'], $d['cid'], $status, $id]);
@@ -419,16 +391,13 @@ function act_export_csv(array $u): void {
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="batchfund_' . $type . '_' . date('Ymd') . '.csv"');
     $out = fopen('php://output', 'w');
-    fwrite($out, "\xEF\xBB\xBF");                                    // UTF-8 BOM so Excel opens it correctly
+    fwrite($out, "\xEF\xBB\xBF");
     fputcsv($out, $head);
     foreach ($data as $r) fputcsv($out, array_map('csv_safe', array_values($r)));
     fclose($out);
     exit;
 }
 
-/* =====================================================================
- * MEMBER 5 – E-MAIL, ANNOUNCEMENTS, NOTIFICATIONS
- * ===================================================================== */
 function act_send_reminder(array $u): void {
     $s = row('SELECT s.student_id, s.user_id, u.full_name, u.email FROM students s JOIN users u ON u.user_id = s.user_id WHERE s.student_id = ? AND s.status = \'active\'', [post_int('student_id')]);
     $c = row('SELECT * FROM collections WHERE collection_id = ?', [post_int('collection_id')]);
@@ -454,9 +423,8 @@ function act_send_bulk_reminders(array $u): void {
         if ($mode === 'overdue' && $c['deadline'] >= date('Y-m-d')) continue;
         if ($mode === 'deadline' && ($c['deadline'] < date('Y-m-d') || strtotime($c['deadline']) > strtotime("+$days days"))) continue;
         foreach (collection_roster((int)$c['collection_id']) as $s) {
-            if ($s['pay_status'] !== null && $s['pay_status'] !== 'rejected') continue;   // paid / awaiting verification
+            if ($s['pay_status'] !== null && $s['pay_status'] !== 'rejected') continue;
             [$subject, $body] = reminder_message($s, $c, $mode);
-            // one individual message per student: recipients never see each other's addresses
             if (send_logged_mail($s, (int)$c['collection_id'], $subject, $body)) $sent++; else $failed++;
             notify((int)$s['user_id'], $c['deadline'] < date('Y-m-d') ? 'overdue' : 'deadline', 'Reminder: "' . $c['title'] . '" – ' . money($c['amount']) . ' due ' . fmt_date($c['deadline']) . '.');
         }

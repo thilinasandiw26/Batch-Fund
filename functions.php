@@ -1,13 +1,5 @@
 <?php
-/**
- * functions.php – shared helpers.
- * Sections are tagged with the owning member (see README).
- */
 require_once __DIR__ . '/config.php';
-
-/* =====================================================================
- * GENERAL HELPERS (Member 1)
- * ===================================================================== */
 function h($v): string
 {
     return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -34,7 +26,7 @@ function flash(string $type, string $msg): void
     $_SESSION['flash'][] = ['type' => $type, 'msg' => $msg];
 }
 
-/* ---- database shortcuts ---- */
+
 function q(string $sql, array $params = []): PDOStatement
 {
     $st = db()->prepare($sql);
@@ -55,7 +47,7 @@ function val(string $sql, array $params = [])
     return q($sql, $params)->fetchColumn();
 }
 
-/* ---- input cleaning / validation ---- */
+
 function post_str(string $k, int $max = 255): string
 {
     return mb_substr(trim(preg_replace('/\s+/u', ' ', (string) ($_POST[$k] ?? ''))), 0, $max);
@@ -92,17 +84,7 @@ function strong_password(string $p): bool
 {
     return strlen($p) >= 8 && preg_match('/[A-Za-z]/', $p) && preg_match('/[0-9]/', $p);
 }
-function generate_password(): string
-{
-    $chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    $p = '';
-    for ($i = 0; $i < 10; $i++) {
-        $p .= $chars[random_int(0, strlen($chars) - 1)];
-    }
-    return $p . random_int(10, 99);
-}
 
-/* ---- CSRF protection ---- */
 function csrf_token(): string
 {
     if (empty($_SESSION['csrf'])) {
@@ -127,9 +109,6 @@ function safe_return(string $default): string
     return preg_match('#^(coordinator|student)\.php(\?[A-Za-z0-9_=&%\-\.]*)?$#', $r) ? $r : $default;
 }
 
-/* =====================================================================
- * AUDIT LOG & NOTIFICATIONS (Members 4 & 5)
- * ===================================================================== */
 function audit(string $action, string $entity, ?int $entityId, string $details = ''): void
 {
     $uid = $_SESSION['user_id'] ?? null;
@@ -159,7 +138,7 @@ function notify_coordinators(string $type, string $message): void
         [$type, mb_substr($message, 0, 255)]
     );
 }
-/** Creates "deadline soon" and "overdue" notices for a student (idempotent thanks to ref_key). */
+
 function generate_deadline_notifications(array $student): void
 {
     $list = student_collections((int) $student['student_id']);
@@ -176,9 +155,6 @@ function generate_deadline_notifications(array $student): void
     }
 }
 
-/* =====================================================================
- * STATUS BADGES (all)
- * ===================================================================== */
 function status_badge(?string $s): string
 {
     $map = [
@@ -207,10 +183,6 @@ function kind_badge(string $kind): string
     return $kind === 'event' ? '<span class="badge b-purple">Special Event</span>' : '<span class="badge b-teal">Monthly</span>';
 }
 
-/* =====================================================================
- * COLLECTIONS & PAYMENT QUERIES (Members 2 & 3)
- * ===================================================================== */
-/** Collections for one student with that student's payment row (if any). */
 function student_collections(int $studentId, ?string $kind = null): array
 {
     $sql = "SELECT c.*, p.payment_id, p.status AS pay_status, p.amount AS paid_amount, p.reference_no,
@@ -224,7 +196,7 @@ function student_collections(int $studentId, ?string $kind = null): array
     }
     return rows($sql . ' ORDER BY c.deadline DESC, c.collection_id DESC', $params);
 }
-/** Every active student with their payment state for a collection. */
+
 function collection_roster(int $collectionId): array
 {
     return rows("SELECT s.student_id, s.user_id, s.reg_no, s.district, u.full_name, u.email,
@@ -233,7 +205,7 @@ function collection_roster(int $collectionId): array
                  LEFT JOIN payments p ON p.student_id = s.student_id AND p.collection_id = ?
                  WHERE s.status = 'active' ORDER BY s.reg_no", [$collectionId]);
 }
-/** Per-collection performance used by dashboard charts and reports. */
+
 function collection_performance(?string $kind = null, int $limit = 6, array $f = []): array
 {
     $where = [];
@@ -258,10 +230,6 @@ function collection_performance(?string $kind = null, int $limit = 6, array $f =
     return rows($sql, $params);
 }
 
-/* =====================================================================
- * FINANCIAL CALCULATIONS (Member 4)
- * Available Balance = Total Approved Payments − Total Approved Expenses
- * ===================================================================== */
 function fund_totals(array $f = []): array
 {
     $pw = ["p.status = 'approved'"];
@@ -359,9 +327,6 @@ function payment_status_summary(array $f = []): array
     return $out;
 }
 
-/* =====================================================================
- * FILE UPLOADS (Member 3) – extension + MIME + size + image check, random names
- * ===================================================================== */
 function handle_upload(array $file): array
 {
     $allowed = ['jpg' => ['image/jpeg'], 'jpeg' => ['image/jpeg'], 'png' => ['image/png'], 'webp' => ['image/webp'], 'pdf' => ['application/pdf']];
@@ -400,7 +365,7 @@ function delete_stored_file(string $stored): void
         @unlink($path);
     }
 }
-/** Streams a stored file inline. Authorisation must be checked by the caller. */
+
 function serve_file(string $stored, string $mime, string $name): void
 {
     $path = UPLOAD_DIR . basename($stored);
@@ -417,9 +382,6 @@ function serve_file(string $stored, string $mime, string $name): void
     exit;
 }
 
-/* =====================================================================
- * E-MAIL (Member 5) – small SMTP client with logging
- * ===================================================================== */
 function send_mail(string $to, string $subject, string $body): array
 {
     $to = str_replace(["\r", "\n"], '', $to);
@@ -502,7 +464,7 @@ function send_mail(string $to, string $subject, string $body): array
     fclose($fp);
     return [true, ''];
 }
-/** Sends one e-mail and records the attempt in email_logs. */
+
 function send_logged_mail(array $student, ?int $collectionId, string $subject, string $body): bool
 {
     [$ok, $err] = send_mail($student['email'], $subject, $body);
@@ -512,7 +474,7 @@ function send_logged_mail(array $student, ?int $collectionId, string $subject, s
     );
     return $ok;
 }
-/** Personalised reminder text: name, collection, outstanding amount, deadline, instructions. */
+
 function reminder_message(array $student, array $c, string $mode): array
 {
     $overdue = $c['deadline'] < date('Y-m-d');
@@ -525,9 +487,7 @@ function reminder_message(array $student, array $c, string $mode): array
     return [$subject, $body];
 }
 
-/* =====================================================================
- * PAGE LAYOUT (shared by coordinator.php and student.php) – Member 1
- * ===================================================================== */
+
 function page_start(string $title, array $nav, string $active, array $user, int $unread = 0): void
 {
     $nameParts = preg_split('/\s+/', trim((string) $user['full_name'])) ?: [''];
@@ -546,13 +506,12 @@ function page_start(string $title, array $nav, string $active, array $user, int 
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title><?= h($title) ?> – <?= APP_NAME ?></title>
         <link rel="stylesheet" href="style.css">
-        <link rel="stylesheet" href="dashboard.css">
     </head>
 
     <body>
         <div class="layout">
             <aside class="sidebar" id="sidebar">
-                <div class="brand"><span class="logo">₿F</span>
+                <div class="brand"><span class="logo"></span>
                     <div><strong><?= APP_NAME ?></strong><small><?= $user['role'] === 'coordinator' ? 'Coordinator' : 'Student' ?>
                             panel</small></div>
                 </div>
@@ -610,7 +569,6 @@ function page_end(): void
     </html>
 <?php }
 
-/** Account page shared by both roles (change own password). */
 function account_page(string $returnUrl): void
 { ?>
     <div class="card narrow">

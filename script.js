@@ -1,17 +1,14 @@
-/* BatchFund – vanilla JS: dialogs, confirmations, validation, live table search, charts */
+
 (function () {
   'use strict';
   const $ = (s, r) => (r || document).querySelector(s);
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 
-  /* mobile sidebar */
   const menuBtn = $('#menuBtn'), sidebar = $('#sidebar');
   if (menuBtn && sidebar) menuBtn.addEventListener('click', () => sidebar.classList.toggle('open'));
 
-  /* close the top-right account menu when clicking elsewhere */
   document.addEventListener('click', e => { $$('details.user-menu[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); }); });
 
-  /* dialogs */
   $$('[data-dialog]').forEach(btn => btn.addEventListener('click', () => { const d = document.getElementById(btn.dataset.dialog); if (d) d.showModal(); }));
   $$('dialog [data-close]').forEach(btn => btn.addEventListener('click', () => btn.closest('dialog').close()));
   $$('dialog').forEach(d => d.addEventListener('click', e => { if (e.target === d) d.close(); }));
@@ -19,21 +16,18 @@
     $('#rejectPaymentId').value = btn.dataset.reject; $('#dlgReject').showModal();
   }));
 
-  /* confirmation dialogs (forms with data-confirm, buttons with data-confirm-btn) */
   $$('form[data-confirm]').forEach(f => f.addEventListener('submit', e => { if (!confirm(f.dataset.confirm)) e.preventDefault(); }));
   $$('[data-confirm-btn]').forEach(b => b.addEventListener('click', e => { if (!confirm(b.dataset.confirmBtn)) e.preventDefault(); }));
 
-  /* print */
+
   $$('[data-print]').forEach(b => b.addEventListener('click', () => window.print()));
 
-  /* live table filter */
   $$('input[data-filter-table]').forEach(inp => inp.addEventListener('input', () => {
     const table = document.getElementById(inp.dataset.filterTable); if (!table) return;
     const term = inp.value.trim().toLowerCase();
     $$('tbody tr', table).forEach(tr => { tr.style.display = tr.textContent.toLowerCase().includes(term) ? '' : 'none'; });
   }));
 
-  /* client-side validation (server re-validates everything) */
   function showError(el, msg) {
     el.classList.add('invalid');
     let m = el.parentElement.querySelector('.field-error');
@@ -62,7 +56,7 @@
     });
   });
 
-  /* payment form: fill the amount from the selected collection */
+
   $$('form[data-pay-form]').forEach(form => {
     const sel = $('[data-pay-select]', form), amt = $('[data-pay-amount]', form);
     const fill = () => { const o = sel.options[sel.selectedIndex]; amt.value = o && o.dataset.amount ? o.dataset.amount : ''; if (o && o.dataset.amount) amt.min = amt.max = o.dataset.amount; };
@@ -75,7 +69,7 @@
     });
   });
 
-  /* ---------- charts (canvas, no libraries) ---------- */
+
   const COLORS = ['#2f5bea', '#12b76a', '#f79009', '#7a5af8', '#0ba5ec', '#f04438', '#667085', '#d444f1'];
   function fmt(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n)); }
 

@@ -1,12 +1,7 @@
 <?php
-/**
- * auth.php  (Member 1 – Authentication, sessions, roles)
- * Included by every page. When requested directly it handles POST login / logout.
- */
 require_once __DIR__ . '/functions.php';
 start_secure_session();
 
-/** Logged-in user row (re-read from DB each request so deactivation takes effect immediately). */
 function current_user(): ?array
 {
     static $cache = false;
@@ -25,7 +20,6 @@ function current_user(): ?array
     return $cache = $u;
 }
 
-/** Page guard: must be logged in with the given role, otherwise redirect / 403. */
 function require_role(string $role): array
 {
     $u = current_user();
@@ -36,7 +30,6 @@ function require_role(string $role): array
 
 function home_for(string $role): string { return $role === 'coordinator' ? 'coordinator.php' : 'student.php'; }
 
-/** Verifies credentials with throttling. Returns [bool, message]. */
 function attempt_login(string $email, string $password): array
 {
     if (($_SESSION['lock_until'] ?? 0) > time()) {
@@ -55,7 +48,7 @@ function attempt_login(string $email, string $password): array
         usleep(400000);
         return [false, 'Invalid email or password.'];
     }
-    session_regenerate_id(true);                      // prevent session fixation
+    session_regenerate_id(true);
     $_SESSION = ['user_id' => (int)$u['user_id'], 'last_seen' => time(), 'csrf' => bin2hex(random_bytes(32))];
     
     q('UPDATE users SET last_login_at = NOW() WHERE user_id = ?', [$u['user_id']]);
@@ -74,7 +67,6 @@ function logout_user(): void
     session_destroy();
 }
 
-// ---- direct request handling: auth.php (POST only) ----
 if (basename($_SERVER['SCRIPT_FILENAME']) === 'auth.php') {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') redirect('index.php');
     if (!csrf_valid()) { flash('error', 'Security token expired. Please try again.'); redirect('index.php'); }

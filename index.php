@@ -1,5 +1,5 @@
 <?php
-/** index.php – login page / entry point (Member 1) */
+
 require_once __DIR__ . '/auth.php';
 $u = current_user();
 if ($u)
@@ -17,7 +17,8 @@ if ($u)
 
 <body class="login-body">
   <div class="login-card">
-    <div class="brand center"><span class="logo">₿F</span>
+    <div class="brand center">
+      <img class = "logo" src="logo.png">
       <div><strong><?= APP_NAME ?></strong><small><?= h(BATCH_NAME) ?></small></div>
     </div>
     <?php foreach ($_SESSION['flash'] ?? [] as $f): ?>

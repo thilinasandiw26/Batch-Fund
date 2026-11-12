@@ -1,24 +1,23 @@
 <?php
-
 define('DB_HOST', '127.0.0.1');
 define('DB_NAME', 'batchfund');
-define('DB_USER', 'root');     
-define('DB_PASS', '');         
+define('DB_USER', 'root');
+define('DB_PASS', '');
 
 define('APP_NAME', 'BatchFund');
 define('BATCH_NAME', 'Batch Fund & Committee Management');
 define('CURRENCY', 'Rs.');
-define('EXPENSE_APPROVAL_REQUIRED', true);   
-define('MAX_UPLOAD_BYTES', 3 * 1024 * 1024); 
+define('EXPENSE_APPROVAL_REQUIRED', true);
+define('MAX_UPLOAD_BYTES', 3 * 1024 * 1024);
 define('UPLOAD_DIR', __DIR__ . '/uploads/');
-define('SESSION_IDLE_SECONDS', 7200);    
+define('SESSION_IDLE_SECONDS', 7200);
 define('PAYMENT_INSTRUCTIONS',
     "Pay by bank transfer to: Batch Fund Account, Account No. 0000-0000-0000, Example Bank.\n" .
     "Use your registration number as the transfer remark, then upload the slip/receipt in BatchFund.");
 
 define('SMTP_HOST', '');
 define('SMTP_PORT', 587);
-define('SMTP_SECURE', 'tls');   
+define('SMTP_SECURE', 'tls');
 define('SMTP_USER', '');
 define('SMTP_PASS', '');
 define('MAIL_FROM', 'noreply@batchfund.local');
@@ -26,11 +25,9 @@ define('MAIL_FROM_NAME', 'BatchFund Committee');
 
 date_default_timezone_set('Asia/Colombo');
 
-
 header('X-Frame-Options: DENY');
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
-
 
 function start_secure_session(): void
 {

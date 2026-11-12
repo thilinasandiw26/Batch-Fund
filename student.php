@@ -1,9 +1,5 @@
 <?php
-/**
- * student.php – every student page, selected with ?page=
- * dashboard | collections | pay | history | finances | notifications | announcements | account
- * All data is limited to the logged-in student (student_id comes from the session only).
- */
+
 require_once __DIR__ . '/auth.php';
 $user = require_role('student');
 $page = $_GET['page'] ?? 'dashboard';

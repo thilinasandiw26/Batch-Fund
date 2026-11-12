@@ -69,7 +69,7 @@ function progress(float $pct): string
   return '<div class="progress"><div style="width:' . round($pct) . '%"></div></div>';
 }
 
-/* ===================================================================== DASHBOARD */
+
 function page_dashboard(array $u): void
 {
   $t = fund_totals();
@@ -148,7 +148,7 @@ function page_dashboard(array $u): void
   </div>
 <?php }
 
-/* ===================================================================== STUDENTS */
+
 function page_students(array $u): void
 {
   $search = trim((string) ($_GET['q'] ?? ''));
@@ -326,7 +326,7 @@ function page_student_view(array $u): void
   </div>
 <?php }
 
-/* ===================================================================== COLLECTIONS & EVENTS */
+
 function page_monthly(array $u): void
 {
   collections_page('monthly');
@@ -506,7 +506,7 @@ function page_collection_view(array $u): void
   <?php endforeach;
 }
 
-/* ===================================================================== PAYMENTS */
+
 function page_payments(array $u): void
 {
   $status = $_GET['status'] ?? '';
@@ -605,7 +605,7 @@ function page_payments(array $u): void
   </dialog>
 <?php }
 
-/* ===================================================================== EXPENSES */
+
 function expense_form_fields(?array $e, array $cols): void
 { ?>
   <label>Title<input name="title" required minlength="3" maxlength="150" value="<?= h($e['title'] ?? '') ?>"></label>
@@ -728,7 +728,7 @@ function page_expense_edit(array $u): void
   </div>
 <?php }
 
-/* ===================================================================== REPORTS */
+
 function page_reports(array $u): void
 {
   $f = report_filters();
@@ -841,7 +841,7 @@ function page_reports(array $u): void
   </div>
 <?php }
 
-/* ===================================================================== REMINDERS */
+
 function page_reminders(array $u): void
 {
   $cols = rows("SELECT collection_id, title, kind, deadline FROM collections WHERE status = 'open' ORDER BY deadline");
@@ -893,7 +893,7 @@ function page_reminders(array $u): void
   </div>
 <?php }
 
-/* ===================================================================== ANNOUNCEMENTS */
+
 function page_announcements(array $u): void
 {
   $list = rows('SELECT * FROM announcements ORDER BY publish_date DESC, announcement_id DESC'); ?>
@@ -941,7 +941,7 @@ function page_announcements(array $u): void
   </dialog>
 <?php }
 
-/* ===================================================================== NOTIFICATIONS */
+
 function page_notifications(array $u): void
 {
   $list = rows('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC, notification_id DESC LIMIT 100', [$u['user_id']]); ?>
@@ -970,7 +970,7 @@ function page_notifications(array $u): void
   </div>
 <?php }
 
-/* ===================================================================== LOGS */
+
 function page_logs(array $u): void
 {
   $emails = rows('SELECT l.*, usr.full_name FROM email_logs l LEFT JOIN students s ON s.student_id = l.student_id LEFT JOIN users usr ON usr.user_id = s.user_id ORDER BY l.sent_at DESC, l.log_id DESC LIMIT 200');
