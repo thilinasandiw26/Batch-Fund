@@ -8,6 +8,9 @@
   const menuBtn = $('#menuBtn'), sidebar = $('#sidebar');
   if (menuBtn && sidebar) menuBtn.addEventListener('click', () => sidebar.classList.toggle('open'));
 
+  /* close the top-right account menu when clicking elsewhere */
+  document.addEventListener('click', e => { $$('details.user-menu[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); }); });
+
   /* dialogs */
   $$('[data-dialog]').forEach(btn => btn.addEventListener('click', () => { const d = document.getElementById(btn.dataset.dialog); if (d) d.showModal(); }));
   $$('dialog [data-close]').forEach(btn => btn.addEventListener('click', () => btn.closest('dialog').close()));

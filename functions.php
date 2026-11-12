@@ -529,7 +529,15 @@ function reminder_message(array $student, array $c, string $mode): array
  * PAGE LAYOUT (shared by coordinator.php and student.php) – Member 1
  * ===================================================================== */
 function page_start(string $title, array $nav, string $active, array $user, int $unread = 0): void
-{ ?>
+{
+    $nameParts = preg_split('/\s+/', trim((string) $user['full_name'])) ?: [''];
+    $initials = mb_strtoupper(mb_substr($nameParts[0], 0, 1) . (count($nameParts) > 1 ? mb_substr(end($nameParts), 0, 1) : ''));
+    // less-used pages move into the top-right account dropdown
+    $moved = ['reminders', 'announcements', 'logs', 'account'];
+    // Notifications is reached through the bell icon, so it is not listed in the bar or the dropdown
+    $mainNav = array_filter($nav, fn($i) => !in_array($i[0], $moved, true) && $i[0] !== 'notifications');
+    $menuNav = array_filter($nav, fn($i) => in_array($i[0], $moved, true));
+    ?>
     <!DOCTYPE html>
     <html lang="en">
 
@@ -538,6 +546,7 @@ function page_start(string $title, array $nav, string $active, array $user, int 
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title><?= h($title) ?> – <?= APP_NAME ?></title>
         <link rel="stylesheet" href="style.css">
+        <link rel="stylesheet" href="dashboard.css">
     </head>
 
     <body>
@@ -548,21 +557,40 @@ function page_start(string $title, array $nav, string $active, array $user, int 
                             panel</small></div>
                 </div>
                 <nav>
-                    <?php foreach ($nav as $item):
+                    <?php foreach ($mainNav as $item):
                         [$key, $label, $href] = $item; ?>
                         <a href="<?= h($href) ?>" class="<?= $active === $key ? 'active' : '' ?>"><?= h($label) ?>
                             <?php if ($key === 'notifications' && $unread > 0): ?><span
                                     class="count"><?= $unread ?></span><?php endif; ?></a>
                     <?php endforeach; ?>
                 </nav>
-                <form method="post" action="auth.php" class="logout"><?= csrf_field() ?><input type="hidden" name="action"
-                        value="logout"><button class="btn btn-ghost" type="submit">Log out</button></form>
+                <div class="nav-right">
+                    <a class="icon-btn bell" href="?page=notifications" title="Notifications" aria-label="Notifications">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/></svg>
+                        <?php if ($unread > 0): ?><span class="bell-badge"><?= $unread ?></span><?php endif; ?>
+                    </a>
+                    <span class="nav-divider"></span>
+                    <details class="user-menu">
+                        <summary aria-label="Account menu">
+                            <span class="avatar"><?= h($initials) ?></span>
+                            <svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                        </summary>
+                        <div class="user-dropdown">
+                            <div class="user-dropdown-name"><strong><?= h($user['full_name']) ?></strong><small><?= $user['role'] === 'coordinator' ? 'Coordinator' : 'Student' ?></small></div>
+                            <?php foreach ($menuNav as $item):
+                                [$key, $label, $href] = $item; ?>
+                                <a href="<?= h($href) ?>" class="<?= $active === $key ? 'active' : '' ?>"><span><?= h($label) ?></span>
+                                    <?php if ($key === 'notifications' && $unread > 0): ?><span class="count"><?= $unread ?></span><?php endif; ?></a>
+                            <?php endforeach; ?>
+                            <form method="post" action="auth.php" class="logout"><?= csrf_field() ?><input type="hidden" name="action" value="logout"><button class="btn btn-ghost" type="submit">Log out</button></form>
+                        </div>
+                    </details>
+                </div>
             </aside>
             <div class="main">
                 <header class="topbar">
                     <button class="menu-btn" id="menuBtn" type="button" aria-label="Toggle menu">☰</button>
                     <h1><?= h($title) ?></h1>
-                    <div class="user-chip"><?= h($user['full_name']) ?></div>
                 </header>
                 <main class="content">
                     <?php foreach ($_SESSION['flash'] ?? [] as $f): ?>
