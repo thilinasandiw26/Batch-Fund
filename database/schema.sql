@@ -27,6 +27,7 @@ CREATE TABLE students (
   reg_no      VARCHAR(30) NOT NULL,
   contact_no  VARCHAR(20) NOT NULL,
   district    VARCHAR(60) NOT NULL,
+  degree     VARCHAR(60) NULL,
   status      ENUM('active','inactive') NOT NULL DEFAULT 'active',
   created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_students_user (user_id),

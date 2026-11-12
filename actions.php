@@ -63,12 +63,12 @@ function check_errors(array $errors): void { if ($errors) fail(implode(' ', $err
  * SHARED
  * ===================================================================== */
 function act_change_password(array $u): void {
-    $row = row('SELECT password_hash FROM users WHERE user_id = ?', [$u['user_id']]);
+    $row = row('SELECT password FROM users WHERE user_id = ?', [$u['user_id']]);
     $new = (string)($_POST['new_password'] ?? '');
-    if (!password_verify((string)($_POST['current_password'] ?? ''), $row['password_hash'])) fail('Current password is incorrect.');
+    if ((string)($_POST['current_password'] ?? '') !== $row['password']) fail('Current password is incorrect.');
     if ($new !== (string)($_POST['confirm_password'] ?? '')) fail('New passwords do not match.');
     if (!strong_password($new)) fail('New password must be at least 8 characters with letters and numbers.');
-    q('UPDATE users SET password_hash = ? WHERE user_id = ?', [password_hash($new, PASSWORD_DEFAULT), $u['user_id']]);
+    q('UPDATE users SET password = ? WHERE user_id = ?', [$new, $u['user_id']]);
     audit('change_password', 'user', (int)$u['user_id']);
     flash('success', 'Password updated.');
 }
@@ -78,13 +78,14 @@ function act_change_password(array $u): void {
  * ===================================================================== */
 function student_input(?int $studentId, ?int $userId): array {
     $d = ['name' => post_str('full_name', 120), 'email' => strtolower(post_str('email', 150)),
-          'reg' => strtoupper(post_str('reg_no', 30)), 'contact' => post_str('contact_no', 20), 'district' => post_str('district', 60)];
+          'reg' => strtoupper(post_str('reg_no', 30)), 'contact' => post_str('contact_no', 20), 'district' => post_str('district', 60),'degree' => post_str('degree', 100)];
     $e = [];
     if (mb_strlen($d['name']) < 3) $e[] = 'Full name is required (min 3 characters).';
     if (!valid_email($d['email'])) $e[] = 'Enter a valid email address.';
-    if (!preg_match('/^[A-Z0-9\/\-]{3,30}$/', $d['reg'])) $e[] = 'Registration number may contain letters, numbers, / and - only.';
+    if (!preg_match('/^[A-Z0-9]{7}$/', $d['reg'])) $e[] = 'Registration number must be 7 characters long and contain only letters and numbers.';
     if (!valid_phone($d['contact'])) $e[] = 'Enter a valid contact number.';
     if ($d['district'] === '') $e[] = 'District is required.';
+    if ($d['degree'] === '') $e[] = 'Degree is required.';
     if (!$e) {
         if (val('SELECT COUNT(*) FROM students WHERE reg_no = ? AND student_id <> ?', [$d['reg'], $studentId ?? 0])) $e[] = 'That registration number already exists.';
         if (val('SELECT COUNT(*) FROM users WHERE email = ? AND user_id <> ?', [$d['email'], $userId ?? 0])) $e[] = 'That email address is already registered.';
@@ -94,19 +95,16 @@ function student_input(?int $studentId, ?int $userId): array {
 }
 function act_add_student(array $u): void {
     $d = student_input(null, null);
-    $pw = (string)($_POST['password'] ?? '');
-    $generated = false;
-    if ($pw === '') { $pw = generate_password(); $generated = true; }
-    elseif (!strong_password($pw)) fail('Password must be at least 8 characters with letters and numbers.');
+    $pw = 'Student@123';
     db()->beginTransaction();
-    q("INSERT INTO users (role, email, password_hash, full_name) VALUES ('student',?,?,?)", [$d['email'], password_hash($pw, PASSWORD_DEFAULT), $d['name']]);
+    q("INSERT INTO users (role, email, password, full_name) VALUES ('student',?,?,?)", [$d['email'], $pw, $d['name']]);
     $uid = (int)db()->lastInsertId();
-    q('INSERT INTO students (user_id, reg_no, contact_no, district) VALUES (?,?,?,?)', [$uid, $d['reg'], $d['contact'], $d['district']]);
+    q('INSERT INTO students (user_id, reg_no, contact_no, district, degree) VALUES (?,?,?,?,?)', [$uid, $d['reg'], $d['contact'], $d['district'], $d['degree']]);
     $sid = (int)db()->lastInsertId();
     audit('add_student', 'student', $sid, $d['reg'] . ' ' . $d['name']);
     db()->commit();
     notify($uid, 'info', 'Welcome to ' . APP_NAME . '! Check the Collections page for contributions.');
-    flash('success', 'Student added.' . ($generated ? " Temporary password (shown once): $pw" : ''));
+    flash('success', 'Student added.');
 }
 function act_update_student(array $u): void {
     $sid = post_int('student_id');
@@ -115,7 +113,7 @@ function act_update_student(array $u): void {
     $d = student_input($sid, (int)$s['user_id']);
     db()->beginTransaction();
     q('UPDATE users SET full_name = ?, email = ? WHERE user_id = ?', [$d['name'], $d['email'], $s['user_id']]);
-    q('UPDATE students SET reg_no = ?, contact_no = ?, district = ? WHERE student_id = ?', [$d['reg'], $d['contact'], $d['district'], $sid]);
+    q('UPDATE students SET reg_no = ?, contact_no = ?, district = ?, degree = ? WHERE student_id = ?', [$d['reg'], $d['contact'], $d['district'], $d['degree'], $sid]);
     audit('update_student', 'student', $sid, $d['reg']);
     db()->commit();
     flash('success', 'Student details updated.');
@@ -136,10 +134,10 @@ function act_reset_password(array $u): void {
     $sid = post_int('student_id');
     $s = row('SELECT user_id FROM students WHERE student_id = ?', [$sid]);
     if (!$s) fail('Student not found.');
-    $pw = generate_password();
-    q('UPDATE users SET password_hash = ? WHERE user_id = ?', [password_hash($pw, PASSWORD_DEFAULT), $s['user_id']]);
+    $pw = 'Student@123';
+    q('UPDATE users SET password = ? WHERE user_id = ?', [$pw, $s['user_id']]);
     audit('reset_password', 'student', $sid);
-    flash('success', "Password reset. New temporary password (shown once): $pw");
+    flash('success', "Password reset to default: $pw");
 }
 function act_delete_student(array $u): void {
     $sid = post_int('student_id');

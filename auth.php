@@ -44,7 +44,6 @@ function attempt_login(string $email, string $password): array
     }
     $u = row('SELECT * FROM users WHERE email = ?', [strtolower($email)]);
     
-    // Direct plain-text comparison instead of password_verify()
     $ok = $u && ($password === $u['password']) && $u['is_active'];
     
     if ($ok && $u['role'] === 'student') {

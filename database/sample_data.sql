@@ -5,24 +5,24 @@ SET NAMES utf8mb4;
 
 INSERT INTO users (user_id, role, email, password , full_name) VALUES
 (1,'coordinator','coordinator@batchfund.test','Coord@123','Batch Coordinator'),
-(2,'student','254155J@batchfund.test','Thi26@12lina','Thilina Perera'),
-(3,'student','254095A@batchfund.test','Nipul@123','Nipul Sanketh'),
-(4,'student','student3@batchfund.test','$2y$10$uM3dy/qalHmy4loGFtvvbOHapp05IEdUR/4qWlCO94a9VV/6ThLh.','Dilshan Fernando'),
-(5,'student','student4@batchfund.test','$2y$10$uM3dy/qalHmy4loGFtvvbOHapp05IEdUR/4qWlCO94a9VV/6ThLh.','Sachini Jayawardena'),
-(6,'student','student5@batchfund.test','$2y$10$uM3dy/qalHmy4loGFtvvbOHapp05IEdUR/4qWlCO94a9VV/6ThLh.','Ruwan Bandara'),
-(7,'student','student6@batchfund.test','$2y$10$uM3dy/qalHmy4loGFtvvbOHapp05IEdUR/4qWlCO94a9VV/6ThLh.','Tharushi Gunasekara'),
-(8,'student','student7@batchfund.test','$2y$10$uM3dy/qalHmy4loGFtvvbOHapp05IEdUR/4qWlCO94a9VV/6ThLh.','Chamod Wickramasinghe'),
-(9,'student','student8@batchfund.test','$2y$10$uM3dy/qalHmy4loGFtvvbOHapp05IEdUR/4qWlCO94a9VV/6ThLh.','Ishara Rajapaksha');
+(2,'student','254155j@batchfund.test','Thi26@12lina','Thilina Perera'),
+(3,'student','254095a@batchfund.test','Nipul@123','Nipul Sanketh'),
+(4,'student','254100b@batchfund.test','Lahiru@123','Lahiru Fernando'),
+(5,'student','254110c@batchfund.test','Saman@123','Saman Perera'),
+(6,'student','254120d@batchfund.test','Kamal@123','Kamal Perera'),
+(7,'student','254130e@batchfund.test','Nuwan@123','Nuwan Perera'),
+(8,'student','254140f@batchfund.test','Heshan@123','Heshan Perera'),
+(9,'student','254150g@batchfund.test','Anjana@123','Anjana Perera');
 
-INSERT INTO students (student_id, user_id, reg_no, contact_no, district) VALUES
-(1,2,'23/IT/001','0771110001','Colombo'),
-(2,3,'23/IT/002','0771110002','Gampaha'),
-(3,4,'23/IT/003','0771110003','Kandy'),
-(4,5,'23/IT/004','0771110004','Galle'),
-(5,6,'23/IT/005','0771110005','Kurunegala'),
-(6,7,'23/IT/006','0771110006','Colombo'),
-(7,8,'23/IT/007','0771110007','Matara'),
-(8,9,'23/IT/008','0771110008','Gampaha');
+INSERT INTO students (student_id, user_id, reg_no, contact_no, district, degree) VALUES
+(1,2,'254155J','0771110001','Colombo','IT'),
+(2,3,'254095A','0771110002','Colombo','IT'),
+(3,4,'254100B','0771110003','Gampaha','ITM'),
+(4,5,'254110C','0771110004','Colombo','IT'),
+(5,6,'254120D','0771110005','Kandy','ITM'),
+(6,7,'254130E','0771110006','Colombo','AI'),
+(7,8,'254140F','0771110007','Galle','IT'),
+(8,9,'254150G','0771110008','Colombo','AI');
 
 INSERT INTO collections (collection_id, kind, title, description, amount, target_amount, collection_month, event_date, deadline, status, created_by) VALUES
 (1,'monthly','September 2026 Batch Fund','Monthly batch fund contribution.',500,NULL,'2026-09-01',NULL,'2026-09-15','closed',1),

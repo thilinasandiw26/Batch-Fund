@@ -183,8 +183,9 @@ function page_students(array $u): void
       <table>
         <thead>
           <tr>
-            <th>Reg. No</th>
+            <th>Index No</th>
             <th>Name</th>
+            <th>Degree</th>
             <th>Email</th>
             <th>Contact</th>
             <th>District</th>
@@ -197,6 +198,7 @@ function page_students(array $u): void
             <tr>
               <td><?= h($s['reg_no']) ?></td>
               <td><?= h($s['full_name']) ?></td>
+              <td><?= h($s['degree']) ?></td>
               <td><?= h($s['email']) ?></td>
               <td><?= h($s['contact_no']) ?></td>
               <td><?= h($s['district']) ?></td>
