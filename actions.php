@@ -10,6 +10,9 @@ $routes = [
     'change_password' => ['any', 'POST'],
     'add_student' => ['coordinator', 'POST'], 'update_student' => ['coordinator', 'POST'], 'toggle_student' => ['coordinator', 'POST'],
     'reset_password' => ['coordinator', 'POST'], 'delete_student' => ['coordinator', 'POST'],
+    'promote_coordinator' => ['coordinator', 'POST'], 'demote_coordinator' => ['coordinator', 'POST'],
+    'set_treasurer' => ['coordinator', 'POST'], 'clear_treasurer' => ['coordinator', 'POST'],
+    'delete_event_image' => ['coordinator', 'POST'], 'view_event_image' => ['any', 'GET'],
     'create_collection' => ['coordinator', 'POST'], 'create_event' => ['coordinator', 'POST'], 'update_collection' => ['coordinator', 'POST'],
     'close_collection' => ['coordinator', 'POST'], 'reopen_collection' => ['coordinator', 'POST'],
     'submit_payment' => ['student', 'POST'], 'start_review' => ['coordinator', 'POST'], 'approve_payment' => ['coordinator', 'POST'],
@@ -26,7 +29,8 @@ $routes = [
 if (!isset($routes[$action])) { http_response_code(400); exit('Unknown action.'); }
 [$roleNeeded, $method] = $routes[$action];
 if ($_SERVER['REQUEST_METHOD'] !== $method) { http_response_code(405); exit('Method not allowed.'); }
-if ($roleNeeded !== 'any' && $user['role'] !== $roleNeeded) { http_response_code(403); exit('403 Forbidden.'); }
+$allowed = $roleNeeded === 'any' || ($roleNeeded === 'student' ? can_use_student_portal($user) : $user['role'] === $roleNeeded);
+if (!$allowed) { http_response_code(403); exit('403 Forbidden.'); }
 
 $defaultReturn = home_for($user['role']);
 if ($method === 'POST' && !csrf_valid()) {
@@ -103,6 +107,7 @@ function act_toggle_student(array $u): void {
     $sid = post_int('student_id');
     $s = row('SELECT * FROM students WHERE student_id = ?', [$sid]);
     if (!$s) fail('Student not found.');
+    if (is_coordinator_user((int)$s['user_id'])) fail('This student is a coordinator. Remove coordinator access before deactivating the account.');
     $new = $s['status'] === 'active' ? 'inactive' : 'active';
     db()->beginTransaction();
     q('UPDATE students SET status = ? WHERE student_id = ?', [$new, $sid]);
@@ -115,6 +120,7 @@ function act_reset_password(array $u): void {
     $sid = post_int('student_id');
     $s = row('SELECT user_id FROM students WHERE student_id = ?', [$sid]);
     if (!$s) fail('Student not found.');
+    if (is_coordinator_user((int)$s['user_id'])) fail('This student is a coordinator. Coordinators change their own password under My Account (or remove coordinator access first).');
     $pw = 'Student@123';
     q('UPDATE users SET password = ? WHERE user_id = ?', [$pw, $s['user_id']]);
     audit('reset_password', 'student', $sid);
@@ -124,11 +130,62 @@ function act_delete_student(array $u): void {
     $sid = post_int('student_id');
     $s = row('SELECT user_id FROM students WHERE student_id = ?', [$sid]);
     if (!$s) fail('Student not found.');
+    if (is_coordinator_user((int)$s['user_id'])) fail('This student is a coordinator. Remove coordinator access before deleting the account.');
     if (val('SELECT COUNT(*) FROM payments WHERE student_id = ?', [$sid])) fail('This student has payment records and cannot be deleted. Deactivate the account instead.');
     q('DELETE FROM users WHERE user_id = ?', [$s['user_id']]);
     audit('delete_student', 'student', $sid);
     flash('success', 'Student deleted.');
     redirect('coordinator.php?page=students');
+}
+
+function act_promote_coordinator(array $u): void {
+    $s = row('SELECT s.student_id, s.status, u.user_id, u.full_name, u.role FROM students s JOIN users u ON u.user_id = s.user_id WHERE s.student_id = ?', [post_int('student_id')]);
+    if (!$s) fail('Student not found.');
+    if ($s['role'] === 'coordinator') fail($s['full_name'] . ' is already a coordinator.');
+    if ($s['status'] !== 'active') fail('Only active students can be made coordinators.');
+    $r = q("UPDATE users SET role = 'coordinator' WHERE user_id = ? AND role = 'student'", [$s['user_id']]);
+    if ($r->rowCount() !== 1) fail('Could not change this account.');
+    audit('promote_coordinator', 'student', (int)$s['student_id'], $s['full_name'] . ' made coordinator by ' . $u['full_name']);
+    notify((int)$s['user_id'], 'info', $u['full_name'] . ' made you a coordinator. Use the account menu (top right) to switch between the coordinator panel and your student view.');
+    notify_coordinators('info', $u['full_name'] . ' made ' . $s['full_name'] . ' a coordinator.', [$u['user_id'], $s['user_id']]);
+    flash('success', $s['full_name'] . ' is now a coordinator.');
+}
+function act_demote_coordinator(array $u): void {
+    $s = row('SELECT s.student_id, u.user_id, u.full_name, u.role FROM students s JOIN users u ON u.user_id = s.user_id WHERE s.student_id = ?', [post_int('student_id')]);
+    if (!$s) fail('Student not found.');
+    if ($s['role'] !== 'coordinator') fail($s['full_name'] . ' is not a coordinator.');
+    if ((int)$s['user_id'] === (int)$u['user_id']) fail('You cannot remove your own coordinator access. Ask another coordinator to do it.');
+    db()->beginTransaction();
+    $left = (int)val("SELECT COUNT(*) FROM users WHERE role = 'coordinator' AND is_active = 1 AND user_id <> ? FOR UPDATE", [$s['user_id']]);
+    if ($left < 1) { db()->rollBack(); fail('At least one active coordinator must remain.'); }
+    q("UPDATE users SET role = 'student', is_treasurer = 0 WHERE user_id = ? AND role = 'coordinator'", [$s['user_id']]);
+    audit('demote_coordinator', 'student', (int)$s['student_id'], $s['full_name'] . ' coordinator access removed by ' . $u['full_name']);
+    db()->commit();
+    notify((int)$s['user_id'], 'info', $u['full_name'] . ' removed your coordinator access. You are now a regular student member.');
+    flash('success', $s['full_name'] . ' is no longer a coordinator.');
+}
+
+function act_set_treasurer(array $u): void {
+    $t = row("SELECT user_id, full_name FROM users WHERE user_id = ? AND role = 'coordinator' AND is_active = 1", [post_int('user_id')]);
+    if (!$t) fail('Choose an active coordinator.');
+    $cur = treasurer_id();
+    if ($cur !== null && $cur === (int)$t['user_id']) fail($t['full_name'] . ' is already the treasurer.');
+    if ($cur !== null && $cur !== (int)$u['user_id']) fail('Only the current treasurer can hand the role over to someone else.');
+    db()->beginTransaction();
+    q('UPDATE users SET is_treasurer = 0 WHERE is_treasurer = 1');
+    q('UPDATE users SET is_treasurer = 1 WHERE user_id = ?', [$t['user_id']]);
+    audit('set_treasurer', 'user', (int)$t['user_id'], $t['full_name'] . ' appointed treasurer by ' . $u['full_name']);
+    db()->commit();
+    notify((int)$t['user_id'], 'info', 'You are now the treasurer. Only you can approve expenses made by other coordinators.');
+    flash('success', $t['full_name'] . ' is now the treasurer.');
+}
+function act_clear_treasurer(array $u): void {
+    $cur = treasurer_id();
+    if ($cur === null) fail('There is no treasurer to remove.');
+    if ($cur !== (int)$u['user_id']) fail('Only the treasurer can step down. (Or remove their coordinator access.)');
+    q('UPDATE users SET is_treasurer = 0 WHERE user_id = ?', [$cur]);
+    audit('clear_treasurer', 'user', $cur, $u['full_name'] . ' stepped down as treasurer');
+    flash('success', 'You are no longer the treasurer. Any coordinator can now approve expenses until a new treasurer is appointed.');
 }
 
 function collection_input(string $kind): array {
@@ -150,17 +207,58 @@ function collection_input(string $kind): array {
     check_errors($e);
     return $d;
 }
+/** Saves the uploaded event images (field "images[]"). Returns how many were stored; stops the request with an error otherwise. */
+function save_event_images(int $cid, int $userId): int {
+    $files = array_values(array_filter(files_from_multi('images'), fn($f) => ($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE));
+    if (!$files) return 0;
+    $have = (int)val('SELECT COUNT(*) FROM event_images WHERE collection_id = ?', [$cid]);
+    $abort = function (string $msg, array $saved) { foreach ($saved as $s) delete_stored_file($s['stored_name']); if (db()->inTransaction()) db()->rollBack(); fail($msg); };
+    if ($have + count($files) > EVENT_IMAGE_LIMIT) $abort('An event can have at most ' . EVENT_IMAGE_LIMIT . ' images (this one has ' . $have . ').', []);
+    $saved = [];
+    foreach ($files as $f) {
+        [$ok, $r] = handle_upload($f, true);
+        if (!$ok) $abort('Image "' . mb_substr((string)$f['name'], 0, 60) . '": ' . $r, $saved);
+        // always store a square, web-sized picture (the browser cropper already does this; this is the safety net)
+        $r['file_size'] = square_resize_image(UPLOAD_DIR . $r['stored_name'], $r['mime_type'], EVENT_IMAGE_SIZE) ?: $r['file_size'];
+        $saved[] = $r;
+    }
+    foreach ($saved as $s)
+        q('INSERT INTO event_images (collection_id, stored_name, original_name, mime_type, file_size, uploaded_by) VALUES (?,?,?,?,?,?)',
+          [$cid, $s['stored_name'], $s['original_name'], $s['mime_type'], $s['file_size'], $userId]);
+    audit('add_event_images', 'collection', $cid, count($saved) . ' image(s) added');
+    return count($saved);
+}
+function act_delete_event_image(array $u): void {
+    $i = row('SELECT * FROM event_images WHERE image_id = ?', [post_int('image_id')]);
+    if (!$i) fail('Image not found.');
+    if ((int)val('SELECT COUNT(*) FROM event_images WHERE collection_id = ?', [$i['collection_id']]) <= 1)
+        fail('A collection must keep a cover image. Upload another one first, then remove this one.');
+    q('DELETE FROM event_images WHERE image_id = ?', [$i['image_id']]);
+    delete_stored_file($i['stored_name']);
+    audit('delete_event_image', 'collection', (int)$i['collection_id'], $i['original_name']);
+    q('UPDATE collections SET updated_by = ? WHERE collection_id = ?', [$u['user_id'], $i['collection_id']]);
+    flash('success', 'Image removed.');
+}
+function act_view_event_image(array $u): void {
+    $i = row('SELECT * FROM event_images WHERE image_id = ?', [(int)($_GET['id'] ?? 0)]);
+    if (!$i) { http_response_code(404); exit('Not found.'); }
+    serve_file($i['stored_name'], $i['mime_type'], $i['original_name']);
+}
 function act_create_collection(array $u): void { create_any_collection($u, 'monthly'); }
 function act_create_event(array $u): void { create_any_collection($u, 'event'); }
 function create_any_collection(array $u, string $kind): void {
     $d = collection_input($kind);
+    db()->beginTransaction();
     q('INSERT INTO collections (kind, title, description, amount, target_amount, collection_month, event_date, deadline, created_by) VALUES (?,?,?,?,?,?,?,?,?)',
       [$kind, $d['title'], $d['description'], $d['amount'], $d['target'], $d['month'], $d['event_date'], $d['deadline'], $u['user_id']]);
     $cid = (int)db()->lastInsertId();
+    $nImg = save_event_images($cid, (int)$u['user_id']);
+    if ($nImg < 1) { db()->rollBack(); fail('Every collection needs a cover image. Please upload at least one picture.'); }
+    db()->commit();
     audit('create_collection', 'collection', $cid, "$kind: {$d['title']}");
     notify_all_students($kind === 'event' ? 'new_event' : 'new_collection',
         ($kind === 'event' ? 'New special-event collection: ' : 'New monthly collection: ') . $d['title'] . ' – ' . money($d['amount']) . ', due ' . fmt_date($d['deadline']) . '.');
-    flash('success', ($kind === 'event' ? 'Event' : 'Collection') . ' created and students notified.');
+    flash('success', ($kind === 'event' ? 'Event' : 'Collection') . ' created and students notified.' . ($nImg ? ' ' . $nImg . ' image' . ($nImg === 1 ? '' : 's') . ' added.' : ''));
 }
 function act_update_collection(array $u): void {
     $cid = post_int('collection_id');
@@ -169,17 +267,21 @@ function act_update_collection(array $u): void {
     $d = collection_input($c['kind']);
     if ((float)$d['amount'] !== (float)$c['amount'] && val('SELECT COUNT(*) FROM payments WHERE collection_id = ?', [$cid]))
         fail('The contribution amount cannot change after payments have been submitted.');
-    q('UPDATE collections SET title=?, description=?, amount=?, target_amount=?, collection_month=?, event_date=?, deadline=? WHERE collection_id=?',
-      [$d['title'], $d['description'], $d['amount'], $d['target'], $d['month'], $d['event_date'], $d['deadline'], $cid]);
+    db()->beginTransaction();
+    q('UPDATE collections SET title=?, description=?, amount=?, target_amount=?, collection_month=?, event_date=?, deadline=?, updated_by=? WHERE collection_id=?',
+      [$d['title'], $d['description'], $d['amount'], $d['target'], $d['month'], $d['event_date'], $d['deadline'], $u['user_id'], $cid]);
+    $nImg = save_event_images($cid, (int)$u['user_id']);
+    if ((int)val('SELECT COUNT(*) FROM event_images WHERE collection_id = ?', [$cid]) < 1) { db()->rollBack(); fail('Every collection needs a cover image. Please upload at least one picture.'); }
+    db()->commit();
     audit('update_collection', 'collection', $cid, $d['title']);
-    flash('success', 'Collection updated.');
+    flash('success', 'Collection updated.' . ($nImg ? ' ' . $nImg . ' image' . ($nImg === 1 ? '' : 's') . ' added.' : ''));
 }
-function act_close_collection(array $u): void { set_collection_status('closed'); }
-function act_reopen_collection(array $u): void { set_collection_status('open'); }
-function set_collection_status(string $status): void {
+function act_close_collection(array $u): void { set_collection_status($u, 'closed'); }
+function act_reopen_collection(array $u): void { set_collection_status($u, 'open'); }
+function set_collection_status(array $u, string $status): void {
     $cid = post_int('collection_id');
     if (!val('SELECT COUNT(*) FROM collections WHERE collection_id = ?', [$cid])) fail('Collection not found.');
-    q('UPDATE collections SET status = ? WHERE collection_id = ?', [$status, $cid]);
+    q('UPDATE collections SET status = ?, updated_by = ? WHERE collection_id = ?', [$status, $u['user_id'], $cid]);
     audit($status === 'closed' ? 'close_collection' : 'reopen_collection', 'collection', $cid);
     flash('success', 'Collection ' . $status . '.');
 }
@@ -223,19 +325,21 @@ function act_submit_payment(array $u): void {
         delete_stored_file($file['stored_name']);
         throw $ex;
     }
-    notify_coordinators('payment_submitted', $u['full_name'] . ' submitted a payment for "' . $c['title'] . '".');
+    notify_coordinators('payment_submitted', $u['full_name'] . ' submitted a payment for "' . $c['title'] . '".', [$u['user_id']]);
     flash('success', 'Payment submitted for verification.');
-    redirect('student.php?page=history');
+    redirect('student.php#recent');
 }
 function load_payment_for_review(): array {
     $p = row('SELECT p.*, c.title, s.user_id AS student_user FROM payments p JOIN collections c ON c.collection_id = p.collection_id
               JOIN students s ON s.student_id = p.student_id WHERE p.payment_id = ?', [post_int('payment_id')]);
     if (!$p) fail('Payment not found.');
+    // a coordinator who is also a paying member must not verify their own money
+    if ((int)$p['student_user'] === (int)($_SESSION['user_id'] ?? 0)) fail('You cannot verify your own payment. Another coordinator must review it.');
     return $p;
 }
 function act_start_review(array $u): void {
     $p = load_payment_for_review();
-    $r = q("UPDATE payments SET status='under_verification' WHERE payment_id=? AND status='receipt_submitted'", [$p['payment_id']]);
+    $r = q("UPDATE payments SET status='under_verification', reviewed_by=? WHERE payment_id=? AND status='receipt_submitted'", [$u['user_id'], $p['payment_id']]);
     if ($r->rowCount() === 1) audit('start_review', 'payment', (int)$p['payment_id']);
     flash('success', 'Payment marked as under verification.');
 }
@@ -284,7 +388,6 @@ function expense_input(): array {
     check_errors($e);
     return $d;
 }
-function expense_categories(): array { return ['Event', 'Food & Refreshments', 'Printing & Stationery', 'Transport', 'Gifts & Welfare', 'Equipment', 'Donations', 'Other']; }
 function save_expense_document(int $expenseId, int $public): void {
     if (!isset($_FILES['document']) || $_FILES['document']['error'] === UPLOAD_ERR_NO_FILE) return;
     [$ok, $f] = handle_upload($_FILES['document']);
@@ -294,7 +397,9 @@ function save_expense_document(int $expenseId, int $public): void {
 }
 function act_add_expense(array $u): void {
     $d = expense_input();
-    $status = EXPENSE_APPROVAL_REQUIRED ? 'pending' : 'approved';
+    $tid = treasurer_id();
+    // with a treasurer, only the treasurer's own expenses may skip the approval step
+    $status = (EXPENSE_APPROVAL_REQUIRED || ($tid !== null && $tid !== (int)$u['user_id'])) ? 'pending' : 'approved';
     db()->beginTransaction();
     q('INSERT INTO expenses (title, description, category, amount, expense_date, collection_id, status, created_by, approved_by, approved_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
       [$d['title'], $d['description'], $d['category'], $d['amount'], $d['date'], $d['cid'], $status, $u['user_id'],
@@ -303,7 +408,9 @@ function act_add_expense(array $u): void {
     save_expense_document($id, $d['public']);
     audit('add_expense', 'expense', $id, $d['title'] . ' ' . money($d['amount']) . " [$status]");
     db()->commit();
-    flash('success', 'Expense recorded (' . $status . ').');
+    if ($status === 'pending' && $tid !== null && $tid !== (int)$u['user_id'])
+        notify($tid, 'expense_pending', $u['full_name'] . ' added an expense for approval: ' . $d['title'] . ' – ' . money($d['amount']) . '.');
+    flash('success', 'Expense recorded (' . $status . ').' . ($status === 'pending' && $tid !== null && $tid !== (int)$u['user_id'] ? ' The treasurer must approve it.' : ''));
 }
 function act_update_expense(array $u): void {
     $id = post_int('expense_id');
@@ -311,10 +418,11 @@ function act_update_expense(array $u): void {
     if (!$old) fail('Expense not found.');
     $d = expense_input();
     $status = $old['status'];
-    if (EXPENSE_APPROVAL_REQUIRED && $status === 'approved') $status = 'pending';
+    $tid = treasurer_id();
+    if ($status === 'approved' && (EXPENSE_APPROVAL_REQUIRED || ($tid !== null && $tid !== (int)$u['user_id']))) $status = 'pending';
     db()->beginTransaction();
-    q('UPDATE expenses SET title=?, description=?, category=?, amount=?, expense_date=?, collection_id=?, status=?, approved_by=NULL, approved_at=NULL WHERE expense_id=?',
-      [$d['title'], $d['description'], $d['category'], $d['amount'], $d['date'], $d['cid'], $status, $id]);
+    q('UPDATE expenses SET title=?, description=?, category=?, amount=?, expense_date=?, collection_id=?, status=?, approved_by=NULL, approved_at=NULL, updated_by=?, updated_at=NOW() WHERE expense_id=?',
+      [$d['title'], $d['description'], $d['category'], $d['amount'], $d['date'], $d['cid'], $status, $u['user_id'], $id]);
     if ($status === 'approved') q('UPDATE expenses SET approved_by=?, approved_at=? WHERE expense_id=?', [$old['approved_by'], $old['approved_at'], $id]);
     save_expense_document($id, $d['public']);
     audit('update_expense', 'expense', $id, 'was ' . money($old['amount']) . ' now ' . money($d['amount']) . " [$status]");
@@ -341,6 +449,11 @@ function review_expense(array $u, string $to): void {
     db()->beginTransaction();
     $e = row('SELECT * FROM expenses WHERE expense_id = ? FOR UPDATE', [$id]);
     if (!$e) { db()->rollBack(); fail('Expense not found.'); }
+    if (!can_decide_expense($u, $e)) {
+        db()->rollBack();
+        $tn = treasurer_name();
+        fail((int)$e['created_by'] === treasurer_id() ? 'The treasurer cannot approve their own expense. Another coordinator must do it.' : 'Only the treasurer' . ($tn ? ' (' . $tn . ')' : '') . ' can approve or reject expenses made by other coordinators.');
+    }
     if ($e['status'] === $to) { db()->rollBack(); fail('Expense is already ' . $to . '.'); }
     if ($to === 'approved' && $e['status'] !== 'pending' && $e['status'] !== 'rejected') { db()->rollBack(); fail('Expense cannot be approved.'); }
     q('UPDATE expenses SET status=?, approved_by=?, approved_at=NOW() WHERE expense_id=?', [$to, $u['user_id'], $id]);
@@ -453,7 +566,7 @@ function act_create_announcement(array $u): void {
 function act_update_announcement(array $u): void {
     $id = post_int('announcement_id'); $d = announcement_input();
     if (!val('SELECT COUNT(*) FROM announcements WHERE announcement_id = ?', [$id])) fail('Announcement not found.');
-    q('UPDATE announcements SET title=?, body=?, publish_date=? WHERE announcement_id=?', [$d['title'], $d['body'], $d['date'], $id]);
+    q('UPDATE announcements SET title=?, body=?, publish_date=?, updated_by=? WHERE announcement_id=?', [$d['title'], $d['body'], $d['date'], $u['user_id'], $id]);
     audit('update_announcement', 'announcement', $id);
     flash('success', 'Announcement updated.');
 }
@@ -468,7 +581,7 @@ function act_publish_announcement(array $u): void {
     $a = row('SELECT * FROM announcements WHERE announcement_id = ?', [$id]);
     if (!$a) fail('Announcement not found.');
     if ($a['status'] !== 'published') {
-        q("UPDATE announcements SET status='published' WHERE announcement_id=?", [$id]);
+        q("UPDATE announcements SET status='published', updated_by=? WHERE announcement_id=?", [$u['user_id'], $id]);
         notify_all_students('announcement', 'New announcement: ' . $a['title']);
         audit('publish_announcement', 'announcement', $id);
     }
@@ -476,7 +589,7 @@ function act_publish_announcement(array $u): void {
 }
 function act_unpublish_announcement(array $u): void {
     $id = post_int('announcement_id');
-    q("UPDATE announcements SET status='draft' WHERE announcement_id=?", [$id]);
+    q("UPDATE announcements SET status='draft', updated_by=? WHERE announcement_id=?", [$u['user_id'], $id]);
     audit('unpublish_announcement', 'announcement', $id);
     flash('success', 'Announcement moved back to draft.');
 }

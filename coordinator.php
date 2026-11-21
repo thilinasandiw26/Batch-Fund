@@ -164,9 +164,17 @@ function page_students(array $u): void
     $w[] = 's.district = ?';
     $p[] = $district;
   }
-  $list = rows('SELECT s.*, u.full_name, u.email FROM students s JOIN users u ON u.user_id = s.user_id' . ($w ? ' WHERE ' . implode(' AND ', $w) : '') . ' ORDER BY s.reg_no', $p);
+  $list = rows('SELECT s.*, u.full_name, u.email, u.role FROM students s JOIN users u ON u.user_id = s.user_id' . ($w ? ' WHERE ' . implode(' AND ', $w) : '') . ' ORDER BY s.reg_no', $p);
   $districts = rows('SELECT DISTINCT district FROM students ORDER BY district');
+  $cnt = row("SELECT COUNT(*) AS total, COALESCE(SUM(status = 'active'), 0) AS active, COALESCE(SUM(status = 'inactive'), 0) AS inactive FROM students");
+  $coordinators = rows("SELECT u.user_id, u.full_name, u.email, u.last_login_at, u.is_treasurer, s.student_id FROM users u LEFT JOIN students s ON s.user_id = u.user_id WHERE u.role = 'coordinator' AND u.is_active = 1 ORDER BY u.full_name");
   ?>
+  <div class="stats">
+    <?= stat_card('Total students', (string) (int) $cnt['total']) ?>
+    <?= stat_card('Active students', (string) (int) $cnt['active'], 'green') ?>
+    <?= stat_card('Inactive students', (string) (int) $cnt['inactive'], 'amber') ?>
+    <?= stat_card('Coordinators', (string) count($coordinators), 'blue') ?>
+  </div>
   <div class="toolbar">
     <form method="get" class="filters"><input type="hidden" name="page" value="students">
       <input type="search" name="q" value="<?= h($search) ?>" placeholder="Search name, reg. no, email…">
@@ -179,6 +187,37 @@ function page_students(array $u): void
     <button class="btn btn-primary" data-dialog="dlgAddStudent" type="button">+ Add student</button>
   </div>
   <div class="card">
+    <h2>Coordinators (<?= count($coordinators) ?>)</h2>
+    <p class="muted small">Coordinators can verify payments. Expenses made by a coordinator are approved by the <strong>treasurer</strong> only. To add a coordinator, open a student below and choose <strong>Make coordinator</strong>.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Email</th><th>Last login</th><th>Treasurer</th><th></th></tr>
+        </thead>
+        <tbody>
+          <?php foreach ($coordinators as $c): ?>
+            <tr>
+              <td><?= h($c['full_name']) ?><?= (int) $c['user_id'] === (int) $u['user_id'] ? ' <small class="muted">(you)</small>' : '' ?></td>
+              <td><?= h($c['email']) ?></td>
+              <td><?= $c['last_login_at'] ? fmt_dt($c['last_login_at']) : 'Never' ?></td>
+              <td><?php
+                $curT = treasurer_id(); $me = (int) $u['user_id'];
+                if ($c['is_treasurer']) {
+                  echo '<span class="badge b-green">Treasurer</span> ';
+                  if ($curT === $me) echo post_form('clear_treasurer', 'Step down', [], 'btn btn-sm', 'Step down as treasurer? Any coordinator will be able to approve expenses until a new treasurer is appointed.');
+                } elseif ($curT === null || $curT === $me) {
+                  echo post_form('set_treasurer', 'Make treasurer', ['user_id' => $c['user_id']], 'btn btn-sm', 'Make ' . $c['full_name'] . ' the treasurer? Only the treasurer can approve expenses made by other coordinators.');
+                } else echo '<span class="muted">—</span>';
+              ?></td>
+              <td class="actions"><?php if ($c['student_id']): ?><a class="btn btn-sm" href="?page=student_view&id=<?= (int) $c['student_id'] ?>">Manage</a><?php endif; ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <p class="muted small">Showing <?= count($list) ?> of <?= (int) $cnt['total'] ?> students</p>
     <div class="table-wrap">
       <table>
         <thead>
@@ -197,8 +236,8 @@ function page_students(array $u): void
           <?php foreach ($list as $s): ?>
             <tr>
               <td><?= h($s['reg_no']) ?></td>
-              <td><?= h($s['full_name']) ?></td>
-              <td><?= h($s['degree']) ?></td>
+              <td><?= h($s['full_name']) ?><?= $s['role'] === 'coordinator' ? ' <span class="badge b-blue">Coordinator</span>' : '' ?></td>
+              <td><?= h($s['degree'] ?? '') ?></td>
               <td><?= h($s['email']) ?></td>
               <td><?= h($s['contact_no']) ?></td>
               <td><?= h($s['district']) ?></td>
@@ -209,7 +248,7 @@ function page_students(array $u): void
           <?php endforeach;
           if (!$list): ?>
             <tr>
-              <td colspan="7" class="muted center">No students found.</td>
+              <td colspan="8" class="muted center">No students found.</td>
             </tr><?php endif; ?>
         </tbody>
       </table>
@@ -219,11 +258,11 @@ function page_students(array $u): void
   <dialog id="dlgAddStudent">
     <form method="post" action="actions.php" class="form" data-validate>
       <h2>Add student</h2>
-      <?= csrf_field() ?>  <?= ret() ?><input type="hidden" name="action" value="add_student">
+      <?= csrf_field() ?><?= ret() ?><input type="hidden" name="action" value="add_student">
       <label>Full name<input name="full_name" required minlength="3" maxlength="120"></label>
-      <label>Index number<input name="reg_no" required pattern="[A-Z0-9]{7}"minlength="7" maxlength="7"></label>
+      <label>Index number<input name="reg_no" required pattern="[A-Za-z0-9]{7}" minlength="7" maxlength="7"></label>
       <label>Degree Name
-        <select name="degree">
+        <select name="degree" required>
           <option value="IT">IT</option>
           <option value="ITM">ITM</option>
           <option value="AI">AI</option>
@@ -233,16 +272,16 @@ function page_students(array $u): void
       <label>Contact number<input name="contact_no" required pattern="\+?[0-9][0-9\s\-]{6,18}"
           placeholder="0771234567"></label>
       <label>District
-        <select name="district">
+        <select name="district" required>
           <option value="Colombo">Colombo</option>
-          <option value="Gampha">Gampha</option>
+          <option value="Gampaha">Gampaha</option>
           <option value="Kalutara">Kalutara</option>
           <option value="Kandy">Kandy</option>
-          <option value="Kulunegala">Kurunegala</option>
+          <option value="Kurunegala">Kurunegala</option>
           <option value="Matara">Matara</option>
         </select>
       </label>
-      <label>Default password - Student@123</label>
+      <p class="muted small">Default password: Student@123</p>
       <div class="dlg-actions"><button class="btn" type="button" data-close>Cancel</button><button class="btn btn-primary"
           type="submit">Add student</button></div>
     </form>
@@ -252,7 +291,7 @@ function page_students(array $u): void
 function page_student_view(array $u): void
 {
   $sid = (int) ($_GET['id'] ?? 0);
-  $s = row('SELECT s.*, u.full_name, u.email, u.last_login_at FROM students s JOIN users u ON u.user_id = s.user_id WHERE s.student_id = ?', [$sid]);
+  $s = row('SELECT s.*, u.full_name, u.email, u.last_login_at, u.role FROM students s JOIN users u ON u.user_id = s.user_id WHERE s.student_id = ?', [$sid]);
   if (!$s) {
     echo '<div class="alert alert-error">Student not found.</div>';
     return;
@@ -266,6 +305,13 @@ function page_student_view(array $u): void
     else
       $out += $c['amount'];
   }
+  $curDegree = (string) ($s['degree'] ?? '');
+  $degrees = ['IT', 'ITM', 'AI'];
+  if ($curDegree !== '' && !in_array($curDegree, $degrees, true))
+    $degrees[] = $curDegree;
+  $districts = ['Colombo', 'Gampaha', 'Kalutara', 'Kandy', 'Kurunegala', 'Matara'];
+  if ($s['district'] !== '' && !in_array($s['district'], $districts, true))
+    $districts[] = $s['district'];
   ?>
   <p><a href="?page=students">← Back to students</a></p>
   <div class="stats">
@@ -277,20 +323,46 @@ function page_student_view(array $u): void
       <form method="post" action="actions.php" class="form" data-validate><?= csrf_field() ?><?= ret() ?><input
           type="hidden" name="action" value="update_student"><input type="hidden" name="student_id" value="<?= $sid ?>">
         <label>Full name<input name="full_name" value="<?= h($s['full_name']) ?>" required minlength="3"></label>
-        <label>Registration number<input name="reg_no" value="<?= h($s['reg_no']) ?>" required></label>
+        <label>Index number<input name="reg_no" value="<?= h($s['reg_no']) ?>" required pattern="[A-Za-z0-9]{7}" minlength="7" maxlength="7"></label>
+        <label>Degree
+          <select name="degree" required>
+            <?php if ($curDegree === ''): ?><option value="" selected disabled>Select…</option><?php endif; ?>
+            <?php foreach ($degrees as $d): ?>
+              <option value="<?= h($d) ?>" <?= $curDegree === $d ? 'selected' : '' ?>><?= h($d) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </label>
         <label>Email<input type="email" name="email" value="<?= h($s['email']) ?>" required></label>
         <label>Contact number<input name="contact_no" value="<?= h($s['contact_no']) ?>" required></label>
-        <label>District<input name="district" value="<?= h($s['district']) ?>" required></label>
+        <label>District
+          <select name="district" required>
+            <?php foreach ($districts as $d): ?>
+              <option value="<?= h($d) ?>" <?= $s['district'] === $d ? 'selected' : '' ?>><?= h($d) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </label>
         <button class="btn btn-primary" type="submit">Save changes</button>
       </form>
     </div>
     <div class="card">
       <h2>Account</h2>
-      <p>Status: <?= status_badge($s['status']) ?></p>
+      <p>Status: <?= status_badge($s['status']) ?> &nbsp; Role: <?= $s['role'] === 'coordinator' ? '<span class="badge b-blue">Coordinator</span>' : '<span class="badge b-grey">Student</span>' ?></p>
       <div class="btn-row">
-        <?= post_form('toggle_student', $s['status'] === 'active' ? 'Deactivate account' : 'Activate account', ['student_id' => $sid], 'btn', 'Change this account\'s status?') ?>
-        <?= post_form('reset_password', 'Reset password', ['student_id' => $sid], 'btn', 'Generate a new temporary password for this student?') ?>
-        <?= post_form('delete_student', 'Delete student', ['student_id' => $sid], 'btn btn-danger', 'Permanently delete this student? This only works if they have no payments.') ?>
+        <?php if ($s['role'] === 'coordinator'): ?>
+          <?php if ((int) $s['user_id'] !== (int) $u['user_id']): ?>
+            <?= post_form('demote_coordinator', 'Remove coordinator access', ['student_id' => $sid], 'btn btn-danger', 'Remove coordinator access from ' . $s['full_name'] . '? They will become a regular student.') ?>
+          <?php else: ?>
+            <small class="muted">This is your own account. Another coordinator can change your role.</small>
+          <?php endif; ?>
+          <p class="muted small">Remove coordinator access first if you need to deactivate, reset the password of, or delete this account.</p>
+        <?php else: ?>
+          <?php if ($s['status'] === 'active'): ?>
+            <?= post_form('promote_coordinator', 'Make coordinator', ['student_id' => $sid], 'btn btn-primary', 'Make ' . $s['full_name'] . ' a coordinator? They will be able to approve payments and expenses, manage students, and promote others.') ?>
+          <?php endif; ?>
+          <?= post_form('toggle_student', $s['status'] === 'active' ? 'Deactivate account' : 'Activate account', ['student_id' => $sid], 'btn', 'Change this account\'s status?') ?>
+          <?= post_form('reset_password', 'Reset password', ['student_id' => $sid], 'btn', 'Generate a new temporary password for this student?') ?>
+          <?= post_form('delete_student', 'Delete student', ['student_id' => $sid], 'btn btn-danger', 'Permanently delete this student? This only works if they have no payments.') ?>
+        <?php endif; ?>
       </div>
     </div>
   </div>
@@ -339,6 +411,7 @@ function collections_page(string $kind): void
 {
   $list = collection_performance($kind, 500);
   $isEvent = $kind === 'event';
+  $imgMap = event_image_ids(array_column($list, 'collection_id'));
   ?>
   <div class="toolbar"><span class="muted"><?= count($list) ?>   <?= $isEvent ? 'events' : 'monthly collections' ?></span>
     <button class="btn btn-primary" data-dialog="dlgCollection" type="button">+ New
@@ -363,7 +436,9 @@ function collections_page(string $kind): void
             $goal = $c['target_amount'] ?: $c['amount'] * $c['students'];
             $pct = $goal > 0 ? $c['collected'] / $goal * 100 : 0; ?>
             <tr>
-              <td><?= kind_badge($kind) ?>     <?= h($c['title']) ?></td>
+              <td><div class="title-cell">
+                <?php $im = $imgMap[(int) $c['collection_id']] ?? []; if ($im): ?><img class="thumb" src="<?= h(event_image_url($im[0])) ?>" alt="" loading="lazy"><?php endif; ?>
+                <div><?= kind_badge($kind) ?> <?= h($c['title']) ?><?= $im ? '<small class="by">' . count($im) . ' photo' . (count($im) === 1 ? '' : 's') . '</small>' : '' ?></div></div></td>
               <td>
                 <?= $isEvent ? fmt_date($full['event_date']) : ($full['collection_month'] ? date('F Y', strtotime($full['collection_month'])) : '—') ?>
               </td>
@@ -385,7 +460,7 @@ function collections_page(string $kind): void
     </div>
   </div>
   <dialog id="dlgCollection">
-    <form method="post" action="actions.php" class="form" data-validate>
+    <form method="post" action="actions.php" class="form" data-validate enctype="multipart/form-data">
       <h2>New <?= $isEvent ? 'special event' : 'monthly collection' ?></h2><?= csrf_field() ?><?= ret() ?><input
         type="hidden" name="action" value="<?= $isEvent ? 'create_event' : 'create_collection' ?>">
       <?php collection_form_fields($kind, null); ?>
@@ -410,6 +485,10 @@ function collection_form_fields(string $kind, ?array $c): void
     <label>Event date (optional)<input type="date" name="event_date" value="<?= h($c['event_date'] ?? '') ?>"></label>
   <?php endif; ?>
   <label>Payment deadline<input type="date" name="deadline" required value="<?= h($c['deadline'] ?? '') ?>"></label>
+  <?php /* every collection (monthly or event) needs a cover image */ ?>
+    <?php $haveImg = $c ? (int) val('SELECT COUNT(*) FROM event_images WHERE collection_id = ?', [$c['collection_id']]) : 0; ?>
+    <label>Cover image<?= $haveImg ? '' : ' <span class="text-red">*</span>' ?><input type="file" name="images[]" multiple <?= $haveImg ? '' : 'required' ?> accept=".jpg,.jpeg,.png,.webp" data-max="<?= MAX_UPLOAD_BYTES ?>" data-images
+        data-limit="<?= EVENT_IMAGE_LIMIT ?>" data-size="<?= EVENT_IMAGE_SIZE ?>" data-raw-max="<?= EVENT_IMAGE_RAW_MAX ?>"><small class="muted">JPG, PNG or WEBP · originals up to <?= EVENT_IMAGE_RAW_MAX / 1048576 ?> MB · up to <?= EVENT_IMAGE_LIMIT ?> per collection. <?= $haveImg ? 'Add more or remove old ones below.' : 'At least one is required – the first image is the cover shown to students.' ?> You crop each one to a square and it is resized automatically.</small></label>
 <?php }
 function page_collection_view(array $u): void
 {
@@ -428,6 +507,7 @@ function page_collection_view(array $u): void
   $collected = array_sum(array_map(fn($r) => (float) $r['paid_amount'], $paid));
   $goal = $c['target_amount'] ?: $c['amount'] * count($roster);
   $kind = $c['kind'];
+  $who = row('SELECT cr.full_name AS creator, up.full_name AS editor FROM collections c LEFT JOIN users cr ON cr.user_id = c.created_by LEFT JOIN users up ON up.user_id = c.updated_by WHERE c.collection_id = ?', [$cid]);
   ?>
   <p><a href="?page=<?= $kind === 'event' ? 'events' : 'monthly' ?>">← Back</a></p>
   <div class="stats">
@@ -443,11 +523,20 @@ function page_collection_view(array $u): void
     </div>
     <?= progress($goal > 0 ? $collected / $goal * 100 : 0) ?><small>Goal <?= money($goal) ?> · deadline
       <?= fmt_date($c['deadline']) ?></small>
+    <?= credit([['Created by', $who['creator'] ?? null], ['Last changed by', $who['editor'] ?? null, $who['editor'] ? $c['updated_at'] : null]]) ?>
+    <?php if (true): $imgs = rows('SELECT * FROM event_images WHERE collection_id = ? ORDER BY image_id', [$cid]); ?>
+      <div class="gallery">
+        <?php foreach ($imgs as $im): ?>
+          <figure class="g-item"><a href="<?= h(event_image_url((int) $im['image_id'])) ?>" target="_blank" rel="noopener"><img src="<?= h(event_image_url((int) $im['image_id'])) ?>" alt="<?= h($im['original_name']) ?>" loading="lazy"></a>
+            <?= post_form('delete_event_image', 'Remove', ['image_id' => $im['image_id']], 'btn btn-sm', 'Remove this image?') ?></figure>
+        <?php endforeach; if (!$imgs): ?><p class="muted small">No images yet – add some in the Edit form below.</p><?php endif; ?>
+      </div>
+    <?php endif; ?>
   </div>
   <div class="grid2">
     <div class="card">
       <h2>Edit</h2>
-      <form method="post" action="actions.php" class="form" data-validate><?= csrf_field() ?><?= ret() ?>
+      <form method="post" action="actions.php" class="form" data-validate enctype="multipart/form-data"><?= csrf_field() ?><?= ret() ?>
         <input type="hidden" name="action" value="update_collection"><input type="hidden" name="collection_id"
           value="<?= $cid ?>">
         <?php collection_form_fields($kind, $c); ?><button class="btn btn-primary" type="submit">Save changes</button>
@@ -523,7 +612,7 @@ function page_payments(array $u): void
     $w[] = 'p.collection_id = ?';
     $p[] = $cid;
   }
-  $list = rows("SELECT p.*, s.reg_no, u.full_name, c.title, c.kind FROM payments p JOIN students s ON s.student_id = p.student_id JOIN users u ON u.user_id = s.user_id
+  $list = rows("SELECT p.*, s.reg_no, s.user_id AS student_user, u.full_name, rv.full_name AS reviewer, c.title, c.kind FROM payments p LEFT JOIN users rv ON rv.user_id = p.reviewed_by JOIN students s ON s.student_id = p.student_id JOIN users u ON u.user_id = s.user_id
                   JOIN collections c ON c.collection_id = p.collection_id" . ($w ? ' WHERE ' . implode(' AND ', $w) : '') . ' ORDER BY (p.status IN (\'receipt_submitted\',\'under_verification\')) DESC, p.submitted_at DESC LIMIT 500', $p);
   $cols = rows('SELECT collection_id, title FROM collections ORDER BY deadline DESC');
   ?>
@@ -572,11 +661,14 @@ function page_payments(array $u): void
               <td><?= (int) $r['attempt_no'] ?><?= $r['attempt_no'] > 1 ? ' <small>(resubmitted)</small>' : '' ?></td>
               <td>
                 <?= status_badge($r['status']) ?>    <?= $r['rejection_reason'] ? '<br><small class="muted">' . h($r['rejection_reason']) . '</small>' : '' ?>
+                <?= credit([[review_label($r['status']), $r['reviewer'], $r['status'] === 'under_verification' ? null : $r['reviewed_at']]]) ?>
               </td>
               <td><?php foreach ($receipts as $rc): ?><a
                     href="actions.php?action=download_receipt&id=<?= $rc['receipt_id'] ?>" target="_blank"
                     rel="noopener">#<?= $rc['attempt_no'] ?></a> <?php endforeach; ?></td>
-              <td class="actions"><?php if (in_array($r['status'], ['receipt_submitted', 'under_verification'], true)): ?>
+              <td class="actions"><?php if ((int) $r['student_user'] === (int) $u['user_id'] && in_array($r['status'], ['receipt_submitted', 'under_verification'], true)): ?>
+                  <small class="muted">Your own payment – another coordinator must verify it.</small>
+                <?php elseif (in_array($r['status'], ['receipt_submitted', 'under_verification'], true)): ?>
                   <?= $r['status'] === 'receipt_submitted' ? post_form('start_review', 'Review', ['payment_id' => $r['payment_id']]) : '' ?>
                   <?= post_form('approve_payment', 'Approve', ['payment_id' => $r['payment_id']], 'btn btn-sm btn-primary', 'Approve this payment of ' . money($r['amount']) . ' from ' . $r['full_name'] . '?') ?>
                   <button class="btn btn-sm btn-danger" type="button"
@@ -629,9 +721,11 @@ function expense_form_fields(?array $e, array $cols): void
 <?php }
 function page_expenses(array $u): void
 {
-  $list = rows('SELECT e.*, (SELECT COUNT(*) FROM expense_documents d WHERE d.expense_id = e.expense_id) AS docs, c.title AS ctitle FROM expenses e LEFT JOIN collections c ON c.collection_id = e.collection_id ORDER BY e.expense_date DESC, e.expense_id DESC');
+  $list = rows('SELECT e.*, (SELECT COUNT(*) FROM expense_documents d WHERE d.expense_id = e.expense_id) AS docs, c.title AS ctitle, cr.full_name AS creator, ap.full_name AS approver, up.full_name AS editor FROM expenses e LEFT JOIN collections c ON c.collection_id = e.collection_id LEFT JOIN users cr ON cr.user_id = e.created_by LEFT JOIN users ap ON ap.user_id = e.approved_by LEFT JOIN users up ON up.user_id = e.updated_by ORDER BY e.expense_date DESC, e.expense_id DESC');
   $cols = rows('SELECT collection_id, title FROM collections ORDER BY deadline DESC');
+  $tName = treasurer_name();
   ?>
+  <div class="alert alert-info"><?= $tName ? 'Treasurer: <strong>' . h($tName) . '</strong> – only the treasurer can approve expenses made by other coordinators.' : 'No treasurer appointed yet – any coordinator can approve expenses. Appoint one under Students → Coordinators.' ?></div>
   <div class="toolbar"><input type="search" placeholder="Search expenses…" data-filter-table="expTable"><button
       class="btn btn-primary" data-dialog="dlgExpense" type="button">+ Add expense</button></div>
   <div class="card">
@@ -654,18 +748,22 @@ function page_expenses(array $u): void
             $docs = $e['docs'] ? rows('SELECT document_id, original_name FROM expense_documents WHERE expense_id = ?', [$e['expense_id']]) : []; ?>
             <tr>
               <td><?= fmt_date($e['expense_date']) ?></td>
-              <td><?= h($e['title']) ?></td>
+              <td><?= h($e['title']) ?><?= credit([['Added by', $e['creator']], ['Edited by', $e['editor'], $e['updated_at']]]) ?></td>
               <td><?= h($e['category']) ?></td>
               <td><?= h($e['ctitle'] ?? '—') ?></td>
               <td class="num"><?= money($e['amount']) ?></td>
-              <td><?= status_badge($e['status']) ?></td>
+              <td><?= status_badge($e['status']) ?><?= $e['status'] === 'pending' ? '' : credit([[review_label($e['status']), $e['approver'], $e['approved_at']]]) ?></td>
               <td><?php foreach ($docs as $d): ?><a
                     href="actions.php?action=download_expense_doc&id=<?= $d['document_id'] ?>" target="_blank"
                     rel="noopener">📎</a> <?php endforeach; ?></td>
               <td class="actions"><a class="btn btn-sm" href="?page=expense_edit&id=<?= $e['expense_id'] ?>">Edit</a>
-                <?= $e['status'] !== 'approved' ? post_form('approve_expense', 'Approve', ['expense_id' => $e['expense_id']], 'btn btn-sm btn-primary', 'Approve this expense? It will reduce the available balance.') : '' ?>
-                <?= $e['status'] === 'pending' ? post_form('reject_expense', 'Reject', ['expense_id' => $e['expense_id']], 'btn btn-sm', 'Reject this expense?') : '' ?>
-                <?= $e['status'] === 'approved' ? post_form('reject_expense', 'Revoke', ['expense_id' => $e['expense_id']], 'btn btn-sm', 'Revoke approval? The amount will no longer count as an expense.') : '' ?>
+                <?php if (can_decide_expense($u, $e)): ?>
+                  <?= $e['status'] !== 'approved' ? post_form('approve_expense', 'Approve', ['expense_id' => $e['expense_id']], 'btn btn-sm btn-primary', 'Approve this expense? It will reduce the available balance.') : '' ?>
+                  <?= $e['status'] === 'pending' ? post_form('reject_expense', 'Reject', ['expense_id' => $e['expense_id']], 'btn btn-sm', 'Reject this expense?') : '' ?>
+                  <?= $e['status'] === 'approved' ? post_form('reject_expense', 'Revoke', ['expense_id' => $e['expense_id']], 'btn btn-sm', 'Revoke approval? The amount will no longer count as an expense.') : '' ?>
+                <?php elseif ($e['status'] === 'pending'): ?>
+                  <small class="muted"><?= (int) $e['created_by'] === treasurer_id() ? 'Needs another coordinator' : 'Waiting for treasurer' ?></small>
+                <?php endif; ?>
                 <?= $e['status'] !== 'approved' ? post_form('delete_expense', 'Delete', ['expense_id' => $e['expense_id']], 'btn btn-sm btn-danger', 'Delete this expense permanently?') : '' ?>
               </td>
             </tr>
@@ -693,7 +791,7 @@ function page_expenses(array $u): void
 function page_expense_edit(array $u): void
 {
   $id = (int) ($_GET['id'] ?? 0);
-  $e = row('SELECT * FROM expenses WHERE expense_id = ?', [$id]);
+  $e = row('SELECT e.*, cr.full_name AS creator, ap.full_name AS approver, up.full_name AS editor FROM expenses e LEFT JOIN users cr ON cr.user_id = e.created_by LEFT JOIN users ap ON ap.user_id = e.approved_by LEFT JOIN users up ON up.user_id = e.updated_by WHERE e.expense_id = ?', [$id]);
   if (!$e) {
     echo '<div class="alert alert-error">Expense not found.</div>';
     return;
@@ -705,6 +803,7 @@ function page_expense_edit(array $u): void
   <div class="grid2">
     <div class="card">
       <h2>Expense details <?= status_badge($e['status']) ?></h2>
+      <?= credit([['Added by', $e['creator']], [review_label($e['status']), $e['status'] === 'pending' ? null : $e['approver'], $e['approved_at']], ['Last edited by', $e['editor'], $e['updated_at']]]) ?>
       <form method="post" action="actions.php" enctype="multipart/form-data" class="form" data-validate>
         <?= csrf_field() ?><input type="hidden" name="return" value="coordinator.php?page=expenses">
         <input type="hidden" name="action" value="update_expense"><input type="hidden" name="expense_id"
@@ -847,8 +946,6 @@ function page_reminders(array $u): void
   $cols = rows("SELECT collection_id, title, kind, deadline FROM collections WHERE status = 'open' ORDER BY deadline");
   $students = rows("SELECT s.student_id, s.reg_no, u.full_name FROM students s JOIN users u ON u.user_id = s.user_id WHERE s.status = 'active' ORDER BY s.reg_no");
   ?>
-  <div class="alert alert-info">Emails are sent one-by-one, so students never see each other's addresses. Configure SMTP
-    in <code>config.php</code>; every attempt is stored in the Email Log.</div>
   <div class="grid2">
     <div class="card">
       <h2>Individual reminder</h2>
@@ -896,7 +993,7 @@ function page_reminders(array $u): void
 
 function page_announcements(array $u): void
 {
-  $list = rows('SELECT * FROM announcements ORDER BY publish_date DESC, announcement_id DESC'); ?>
+  $list = rows('SELECT a.*, cr.full_name AS author, up.full_name AS editor FROM announcements a LEFT JOIN users cr ON cr.user_id = a.created_by LEFT JOIN users up ON up.user_id = a.updated_by ORDER BY a.publish_date DESC, a.announcement_id DESC'); ?>
   <div class="toolbar"><span></span><button class="btn btn-primary" data-dialog="dlgAnn" type="button">+ New
       announcement</button></div>
   <?php foreach ($list as $a): ?>
@@ -905,6 +1002,7 @@ function page_announcements(array $u): void
         <h2><?= h($a['title']) ?>     <?= status_badge($a['status']) ?></h2><small><?= fmt_date($a['publish_date']) ?></small>
       </div>
       <p class="pre"><?= h($a['body']) ?></p>
+      <?= credit([['Posted by', $a['author']], ['Last changed by', $a['editor'], $a['editor'] ? $a['updated_at'] : null]]) ?>
       <div class="btn-row"><button class="btn btn-sm" type="button"
           data-dialog="dlgEditAnn<?= $a['announcement_id'] ?>">Edit</button>
         <?= $a['status'] === 'draft' ? post_form('publish_announcement', 'Publish', ['announcement_id' => $a['announcement_id']], 'btn btn-sm btn-primary', 'Publish and notify all students?') : post_form('unpublish_announcement', 'Unpublish', ['announcement_id' => $a['announcement_id']]) ?>

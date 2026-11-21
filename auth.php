@@ -10,21 +10,29 @@ function current_user(): ?array
     if (empty($_SESSION['user_id'])) return null;
     if (time() - ($_SESSION['last_seen'] ?? 0) > SESSION_IDLE_SECONDS) { $_SESSION = []; return null; }
     $_SESSION['last_seen'] = time();
-    $u = row('SELECT user_id, role, email, full_name, is_active FROM users WHERE user_id = ?', [$_SESSION['user_id']]);
+    $u = row('SELECT user_id, role, email, full_name, is_active, is_treasurer FROM users WHERE user_id = ?', [$_SESSION['user_id']]);
     if (!$u || !$u['is_active']) { $_SESSION = []; return null; }
-    if ($u['role'] === 'student') {
-        $s = row('SELECT student_id, reg_no, contact_no, district, status FROM students WHERE user_id = ?', [$u['user_id']]);
-        if (!$s || $s['status'] !== 'active') { $_SESSION = []; return null; }
-        $u = array_merge($u, $s);
-    }
+    // Every student has a profile row. A student who is promoted to coordinator keeps it,
+    // so they can still use the student portal (pay their own contributions).
+    $s = row('SELECT student_id, reg_no, contact_no, district, status FROM students WHERE user_id = ?', [$u['user_id']]);
+    if ($u['role'] === 'student' && (!$s || $s['status'] !== 'active')) { $_SESSION = []; return null; }
+    if ($s) $u = array_merge($u, $s);
     return $cache = $u;
+}
+
+/** Students, and coordinators who were promoted from the student list (and are still active members). */
+function can_use_student_portal(array $u): bool
+{
+    return $u['role'] === 'student'
+        || ($u['role'] === 'coordinator' && !empty($u['student_id']) && ($u['status'] ?? '') === 'active');
 }
 
 function require_role(string $role): array
 {
     $u = current_user();
     if (!$u) { flash('error', 'Please log in to continue.'); redirect('index.php'); }
-    if ($u['role'] !== $role) { http_response_code(403); exit('403 Forbidden – you do not have access to this page.'); }
+    $ok = $role === 'student' ? can_use_student_portal($u) : $u['role'] === $role;
+    if (!$ok) { http_response_code(403); exit('403 Forbidden – you do not have access to this page.'); }
     return $u;
 }
 

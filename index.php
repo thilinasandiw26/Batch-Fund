@@ -19,7 +19,7 @@ if ($u)
   <div class="login-card">
     <div class="brand center">
       <img class = "logo" src="logo.png">
-      <div><strong><?= APP_NAME ?></strong><small><?= h(BATCH_NAME) ?></small></div>
+      <div><strong></strong><small><?= h(BATCH_NAME) ?></small></div>
     </div>
     <?php foreach ($_SESSION['flash'] ?? [] as $f): ?>
       <div class="alert alert-<?= h($f['type']) ?>"><?= h($f['msg']) ?></div>
