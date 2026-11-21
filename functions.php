@@ -106,7 +106,7 @@ function csrf_valid(): bool
 function safe_return(string $default): string
 {
     $r = (string) ($_POST['return'] ?? $_GET['return'] ?? '');
-    return preg_match('#^(coordinator|student)\.php(\?[A-Za-z0-9_=&%\-\.]*)?$#', $r) ? $r : $default;
+    return preg_match('#^(coordinator|student)\.php(\?[A-Za-z0-9_=&%\-\.]*)?(\\#[A-Za-z0-9_\\-]+)?$#', $r) ? $r : $default;
 }
 
 function audit(string $action, string $entity, ?int $entityId, string $details = ''): void
@@ -131,12 +131,69 @@ function notify_all_students(string $type, string $message): void
         [$type, mb_substr($message, 0, 255)]
     );
 }
-function notify_coordinators(string $type, string $message): void
+function notify_coordinators(string $type, string $message, array $exclude = []): void
 {
-    q(
-        "INSERT INTO notifications (user_id, type, message) SELECT user_id, ?, ? FROM users WHERE role='coordinator' AND is_active=1",
-        [$type, mb_substr($message, 0, 255)]
-    );
+    $sql = "INSERT INTO notifications (user_id, type, message) SELECT user_id, ?, ? FROM users WHERE role='coordinator' AND is_active=1";
+    $params = [$type, mb_substr($message, 0, 255)];
+    if ($exclude) {
+        $sql .= ' AND user_id NOT IN (' . implode(',', array_fill(0, count($exclude), '?')) . ')';
+        foreach ($exclude as $id)
+            $params[] = (int) $id;
+    }
+    q($sql, $params);
+}
+function is_coordinator_user(int $userId): bool
+{
+    return (bool) val("SELECT COUNT(*) FROM users WHERE user_id = ? AND role = 'coordinator'", [$userId]);
+}
+
+/**
+ * "Approved by <name> (date)" style credit line.
+ * $parts = list of [label, name, optional date]; entries without a name are skipped.
+ */
+function credit(array $parts): string
+{
+    $out = [];
+    foreach ($parts as $p) {
+        if (empty($p[1]))
+            continue;
+        $out[] = h($p[0]) . ' <strong>' . h($p[1]) . '</strong>' . (!empty($p[2]) ? ' (' . h(fmt_dt($p[2])) . ')' : '');
+    }
+    return $out ? '<small class="by">' . implode(' · ', $out) . '</small>' : '';
+}
+/** user_id of the active treasurer (a coordinator), or null when none is appointed. */
+function treasurer_id(): ?int
+{
+    $id = val("SELECT user_id FROM users WHERE is_treasurer = 1 AND role = 'coordinator' AND is_active = 1 LIMIT 1");
+    return $id ? (int) $id : null;
+}
+function treasurer_name(): ?string
+{
+    $n = val("SELECT full_name FROM users WHERE is_treasurer = 1 AND role = 'coordinator' AND is_active = 1 LIMIT 1");
+    return $n ?: null;
+}
+/**
+ * Who may approve / reject an expense?
+ *  - no treasurer appointed  -> any coordinator (original behaviour)
+ *  - expense made by the treasurer -> any OTHER coordinator (nobody approves their own)
+ *  - expense made by anyone else   -> only the treasurer
+ */
+function can_decide_expense(array $u, array $expense): bool
+{
+    $t = treasurer_id();
+    if ($t === null)
+        return true;
+    $creator = (int) ($expense['created_by'] ?? 0);
+    $me = (int) $u['user_id'];
+    return $creator === $t ? $me !== $t : $me === $t;
+}
+function expense_categories(): array
+{
+    return ['Event', 'Food & Refreshments', 'Printing & Stationery', 'Transport', 'Gifts & Welfare', 'Equipment', 'Donations', 'Other'];
+}
+function review_label(string $status): string
+{
+    return ['approved' => 'Approved by', 'rejected' => 'Rejected by', 'under_verification' => 'Being verified by'][$status] ?? 'Handled by';
 }
 
 function generate_deadline_notifications(array $student): void
@@ -327,7 +384,7 @@ function payment_status_summary(array $f = []): array
     return $out;
 }
 
-function handle_upload(array $file): array
+function handle_upload(array $file, bool $imagesOnly = false): array
 {
     $allowed = ['jpg' => ['image/jpeg'], 'jpeg' => ['image/jpeg'], 'png' => ['image/png'], 'webp' => ['image/webp'], 'pdf' => ['application/pdf']];
     if (!isset($file['error']) || is_array($file['error']))
@@ -341,8 +398,8 @@ function handle_upload(array $file): array
     if (!is_uploaded_file($file['tmp_name']))
         return [false, 'Invalid upload source.'];
     $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-    if (!isset($allowed[$ext]))
-        return [false, 'Only JPG, PNG, WEBP or PDF files are allowed.'];
+    if (!isset($allowed[$ext]) || ($imagesOnly && $ext === 'pdf'))
+        return [false, $imagesOnly ? 'Only JPG, PNG or WEBP images are allowed.' : 'Only JPG, PNG, WEBP or PDF files are allowed.'];
     $mime = (new finfo(FILEINFO_MIME_TYPE))->file($file['tmp_name']);
     if (!in_array($mime, $allowed[$ext], true))
         return [false, 'File content does not match its extension.'];
@@ -357,6 +414,82 @@ function handle_upload(array $file): array
     @chmod(UPLOAD_DIR . $stored, 0644);
     $orig = preg_replace('/[^A-Za-z0-9._\- ]/', '_', basename($file['name']));
     return [true, ['stored_name' => $stored, 'original_name' => mb_substr($orig, 0, 200), 'mime_type' => $mime, 'file_size' => (int) $file['size']]];
+}
+/**
+ * Centre-crops an image file to a square and shrinks it to at most $size px (needs the GD extension).
+ * Safety net for event images, so they are always 1:1 even if the browser cropper was bypassed.
+ * Already-square images that are small enough are left untouched. Returns the new file size, or 0 if nothing changed.
+ */
+function square_resize_image(string $path, string $mime, int $size): int
+{
+    if (!function_exists('imagecreatetruecolor') || !is_file($path))
+        return 0;
+    $info = @getimagesize($path);
+    if (!$info || $info[0] < 1 || $info[1] < 1 || $info[0] * $info[1] > 50000000)   // refuse > 50 megapixels (memory)
+        return 0;
+    [$w, $h] = $info;
+    if ($w === $h && $w <= $size)
+        return 0;
+    $loaders = ['image/jpeg' => 'imagecreatefromjpeg', 'image/png' => 'imagecreatefrompng', 'image/webp' => 'imagecreatefromwebp'];
+    if (!isset($loaders[$mime]) || !function_exists($loaders[$mime]))
+        return 0;
+    $loader = $loaders[$mime];
+    $src = @$loader($path);
+    if (!$src)
+        return 0;
+    if ($mime === 'image/jpeg' && function_exists('exif_read_data') && function_exists('imagerotate')) {
+        $ex = @exif_read_data($path);
+        $deg = [3 => 180, 6 => -90, 8 => 90][(int) ($ex['Orientation'] ?? 1)] ?? 0;
+        if ($deg && ($rot = imagerotate($src, $deg, 0))) {
+            $src = $rot;
+            $w = imagesx($src);
+            $h = imagesy($src);
+        }
+    }
+    $side = min($w, $h);
+    $out = min($size, $side);
+    $dst = imagecreatetruecolor($out, $out);
+    if ($mime === 'image/jpeg') {
+        imagefill($dst, 0, 0, imagecolorallocate($dst, 255, 255, 255));
+    } else {
+        imagealphablending($dst, false);
+        imagesavealpha($dst, true);
+        imagefill($dst, 0, 0, imagecolorallocatealpha($dst, 0, 0, 0, 127));
+    }
+    imagecopyresampled($dst, $src, 0, 0, intdiv($w - $side, 2), intdiv($h - $side, 2), $out, $out, $side, $side);
+    $ok = $mime === 'image/jpeg' ? imagejpeg($dst, $path, 85) : ($mime === 'image/png' ? imagepng($dst, $path, 6) : imagewebp($dst, $path, 85));
+    imagedestroy($src);
+    imagedestroy($dst);
+    clearstatcache(true, $path);
+    return $ok ? (int) filesize($path) : 0;
+}
+/** Turns $_FILES['field'][] (multiple upload) into a list of single-file arrays that handle_upload() accepts. */
+function files_from_multi(string $field): array
+{
+    if (empty($_FILES[$field]))
+        return [];
+    $f = $_FILES[$field];
+    if (!is_array($f['name']))
+        return [$f];
+    $out = [];
+    foreach ($f['name'] as $i => $name)
+        $out[] = ['name' => $name, 'type' => $f['type'][$i], 'tmp_name' => $f['tmp_name'][$i], 'error' => $f['error'][$i], 'size' => $f['size'][$i]];
+    return $out;
+}
+/** [collection_id => [image ids in upload order]] for the given collections. */
+function event_image_ids(array $collectionIds): array
+{
+    $ids = array_values(array_unique(array_map('intval', $collectionIds)));
+    if (!$ids)
+        return [];
+    $map = [];
+    foreach (rows('SELECT image_id, collection_id FROM event_images WHERE collection_id IN (' . implode(',', $ids) . ') ORDER BY image_id') as $r)
+        $map[(int) $r['collection_id']][] = (int) $r['image_id'];
+    return $map;
+}
+function event_image_url(int $imageId): string
+{
+    return 'actions.php?action=view_event_image&id=' . $imageId;
 }
 function delete_stored_file(string $stored): void
 {
@@ -493,10 +626,22 @@ function page_start(string $title, array $nav, string $active, array $user, int 
     $nameParts = preg_split('/\s+/', trim((string) $user['full_name'])) ?: [''];
     $initials = mb_strtoupper(mb_substr($nameParts[0], 0, 1) . (count($nameParts) > 1 ? mb_substr(end($nameParts), 0, 1) : ''));
     // less-used pages move into the top-right account dropdown
-    $moved = ['reminders', 'announcements', 'logs', 'account'];
+    $moved = ['reminders', 'announcements', 'logs', 'account', 'history', 'finances'];
     // Notifications is reached through the bell icon, so it is not listed in the bar or the dropdown
     $mainNav = array_filter($nav, fn($i) => !in_array($i[0], $moved, true) && $i[0] !== 'notifications');
     $menuNav = array_filter($nav, fn($i) => in_array($i[0], $moved, true));
+    // a coordinator who is also a batch member can switch between both panels
+    $onStudentPanel = basename($_SERVER['SCRIPT_NAME'] ?? '') === 'student.php';
+    $bellHref = '?page=notifications';
+    $bellDlg = null;   // nav items may carry a 4th value: the id of a dialog to open instead of following a link
+    foreach ($nav as $i)
+        if ($i[0] === 'notifications') {
+            $bellHref = $i[2];
+            $bellDlg = $i[3] ?? null;
+        }
+    $switch = null;
+    if ($user['role'] === 'coordinator' && can_use_student_portal($user))
+        $switch = $onStudentPanel ? ['coordinator.php', 'Switch to coordinator panel'] : ['student.php', 'Switch to student view'];
     ?>
     <!DOCTYPE html>
     <html lang="en">
@@ -508,12 +653,11 @@ function page_start(string $title, array $nav, string $active, array $user, int 
         <link rel="stylesheet" href="style.css">
     </head>
 
-    <body>
+    <body class="<?= $onStudentPanel ? 'is-student' : '' ?>">
         <div class="layout">
             <aside class="sidebar" id="sidebar">
                 <div class="brand"><span class="logo"></span>
-                    <div><strong><?= APP_NAME ?></strong><small><?= $user['role'] === 'coordinator' ? 'Coordinator' : 'Student' ?>
-                            panel</small></div>
+                    <div><strong><?= APP_NAME ?></strong><small><?= $onStudentPanel ? 'Student' : 'Coordinator' ?> panel</small></div>
                 </div>
                 <nav>
                     <?php foreach ($mainNav as $item):
@@ -524,7 +668,7 @@ function page_start(string $title, array $nav, string $active, array $user, int 
                     <?php endforeach; ?>
                 </nav>
                 <div class="nav-right">
-                    <a class="icon-btn bell" href="?page=notifications" title="Notifications" aria-label="Notifications">
+                    <a class="icon-btn bell" href="<?= h($bellDlg ? '#' : $bellHref) ?>"<?= $bellDlg ? ' data-dialog="' . h($bellDlg) . '"' : '' ?> title="Notifications" aria-label="Notifications">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/></svg>
                         <?php if ($unread > 0): ?><span class="bell-badge"><?= $unread ?></span><?php endif; ?>
                     </a>
@@ -538,9 +682,10 @@ function page_start(string $title, array $nav, string $active, array $user, int 
                             <div class="user-dropdown-name"><strong><?= h($user['full_name']) ?></strong><small><?= $user['role'] === 'coordinator' ? 'Coordinator' : 'Student' ?></small></div>
                             <?php foreach ($menuNav as $item):
                                 [$key, $label, $href] = $item; ?>
-                                <a href="<?= h($href) ?>" class="<?= $active === $key ? 'active' : '' ?>"><span><?= h($label) ?></span>
+                                <a href="<?= h(isset($item[3]) ? '#' : $href) ?>"<?= isset($item[3]) ? ' data-dialog="' . h($item[3]) . '"' : '' ?> class="<?= $active === $key ? 'active' : '' ?>"><span><?= h($label) ?></span>
                                     <?php if ($key === 'notifications' && $unread > 0): ?><span class="count"><?= $unread ?></span><?php endif; ?></a>
                             <?php endforeach; ?>
+                            <?php if ($switch): ?><a href="<?= h($switch[0]) ?>"><span><?= h($switch[1]) ?></span></a><?php endif; ?>
                             <form method="post" action="auth.php" class="logout"><?= csrf_field() ?><input type="hidden" name="action" value="logout"><button class="btn btn-ghost" type="submit">Log out</button></form>
                         </div>
                     </details>

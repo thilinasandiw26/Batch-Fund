@@ -3,10 +3,12 @@ CREATE DATABASE IF NOT EXISTS batchfund;
 USE batchfund;
 
 SET FOREIGN_KEY_CHECKS = 0;
-DROP TABLE IF EXISTS audit_logs, email_logs, announcements, notifications, expense_documents, expenses,
+DROP TABLE IF EXISTS event_images, audit_logs, email_logs, announcements, notifications, expense_documents, expenses,
                      payment_receipts, payments, collections, students, users;
 SET FOREIGN_KEY_CHECKS = 1;
 
+-- NOTE: several coordinators are supported. A student becomes a coordinator when users.role is changed to 'coordinator'
+-- (the students row is kept, so they can still pay their own contributions).
 CREATE TABLE users (
   user_id        INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   role           ENUM('coordinator','student') NOT NULL,
@@ -14,6 +16,7 @@ CREATE TABLE users (
   password       VARCHAR(255) NOT NULL,
   full_name      VARCHAR(120) NOT NULL,
   is_active      TINYINT(1) NOT NULL DEFAULT 1,
+  is_treasurer   TINYINT(1) NOT NULL DEFAULT 0,   -- at most one coordinator; approves other coordinators' expenses
   last_login_at  DATETIME NULL,
   created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_users_email (email),
@@ -22,7 +25,7 @@ CREATE TABLE users (
 
 -- 2. students: extra profile data for users with role = student (1:1 with users)
 CREATE TABLE students (
-  student_id  INT UNSIGNED NOT NULL PRIMARY KEY,
+  student_id  INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   user_id     INT UNSIGNED NOT NULL,
   reg_no      VARCHAR(30) NOT NULL,
   contact_no  VARCHAR(20) NOT NULL,
@@ -49,11 +52,28 @@ CREATE TABLE collections (
   deadline         DATE NOT NULL,
   status           ENUM('open','closed') NOT NULL DEFAULT 'open',
   created_by       INT UNSIGNED NULL,
+  updated_by       INT UNSIGNED NULL,                 -- coordinator who last changed / closed / reopened it
   created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_collections_kind (kind, status),
   KEY idx_collections_deadline (deadline),
-  CONSTRAINT fk_collections_creator FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL
+  CONSTRAINT fk_collections_creator FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
+  CONSTRAINT fk_collections_updater FOREIGN KEY (updated_by) REFERENCES users(user_id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 3b. event_images: pictures for special events (files live in /uploads, served only through PHP)
+CREATE TABLE event_images (
+  image_id      INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  collection_id INT UNSIGNED NOT NULL,
+  stored_name   VARCHAR(80) NOT NULL,
+  original_name VARCHAR(200) NOT NULL,
+  mime_type     VARCHAR(80) NOT NULL,
+  file_size     INT UNSIGNED NOT NULL,
+  uploaded_by   INT UNSIGNED NULL,
+  uploaded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_event_images_collection (collection_id),
+  CONSTRAINT fk_event_images_collection FOREIGN KEY (collection_id) REFERENCES collections(collection_id) ON DELETE CASCADE,
+  CONSTRAINT fk_event_images_user FOREIGN KEY (uploaded_by) REFERENCES users(user_id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 -- 4. payments: ONE row per student per collection. Resubmitting a rejected payment updates this row (attempt_no + 1)
@@ -105,12 +125,15 @@ CREATE TABLE expenses (
   created_by    INT UNSIGNED NULL,
   approved_by   INT UNSIGNED NULL,
   approved_at   DATETIME NULL,
+  updated_by    INT UNSIGNED NULL,                    -- coordinator who last edited the expense
+  updated_at    DATETIME NULL,
   created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_expenses_status (status),
   KEY idx_expenses_date (expense_date),
   CONSTRAINT fk_expenses_collection FOREIGN KEY (collection_id) REFERENCES collections(collection_id) ON DELETE SET NULL,
   CONSTRAINT fk_expenses_creator FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
-  CONSTRAINT fk_expenses_approver FOREIGN KEY (approved_by) REFERENCES users(user_id) ON DELETE SET NULL
+  CONSTRAINT fk_expenses_approver FOREIGN KEY (approved_by) REFERENCES users(user_id) ON DELETE SET NULL,
+  CONSTRAINT fk_expenses_updater FOREIGN KEY (updated_by) REFERENCES users(user_id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 -- 7. expense_documents: invoices; is_public = 1 lets students open the file (only while the expense is approved)
@@ -149,10 +172,12 @@ CREATE TABLE announcements (
   status          ENUM('draft','published') NOT NULL DEFAULT 'draft',
   publish_date    DATE NOT NULL,
   created_by      INT UNSIGNED NULL,
+  updated_by      INT UNSIGNED NULL,                  -- coordinator who last edited / published / unpublished
   created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_announcements_status (status, publish_date),
-  CONSTRAINT fk_announcements_creator FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL
+  CONSTRAINT fk_announcements_creator FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL,
+  CONSTRAINT fk_announcements_updater FOREIGN KEY (updated_by) REFERENCES users(user_id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 -- 10. email_logs: every send attempt (success or failure)

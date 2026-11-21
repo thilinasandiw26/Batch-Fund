@@ -11,6 +11,7 @@ Pure **HTML5 + CSS3 + vanilla JavaScript + PHP (PDO) + MySQL**. No frameworks, n
 2. Copy the whole `BatchFund` folder into `C:\xampp\htdocs\` (macOS/Linux: `/opt/lampp/htdocs/`).
 3. Open **http://localhost/phpmyadmin** → **Import** → choose `database/schema.sql` → **Go** (it creates the `batchfund` database).
 4. Import `database/sample_data.sql` the same way (select the `batchfund` database first).
+   *Already have a database with data?* Don't re-import `schema.sql` (it drops the tables). Import `database/migration_multi_coordinator.sql` once instead.
 5. Open `config.php` and check `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASS` (XAMPP default is `root` with an empty password).
 6. Make sure the `uploads/` folder is writable by the web server (automatic on XAMPP/Windows; on Linux `chmod 775 uploads`).
 7. Browse to **http://localhost/BatchFund/**.
@@ -50,6 +51,10 @@ Uploaded files live in `uploads/` (blocked by `.htaccess`, random names) and are
 `users 1─1 students` · `students 1─N payments N─1 collections` · `payments 1─N payment_receipts` · `collections 1─N expenses (optional link)` · `expenses 1─N expense_documents` · `users 1─N notifications` · `students 1─N email_logs` · `users 1─N audit_logs / announcements`.
 
 Deliberate choices:
+- **Several coordinators.** Any coordinator can open a student (*Students → View / Edit*) and press **Make coordinator** (`users.role` becomes `coordinator`; the `students` row is kept). A promoted coordinator uses the coordinator panel and can switch to their own student view from the account menu to pay their contributions. A coordinator **cannot verify their own payment**, cannot remove their own coordinator access, and a coordinator account cannot be deactivated, reset or deleted until the access is removed first.
+- **Treasurer.** One coordinator can be appointed treasurer (Students → Coordinators → *Make treasurer*; only the current treasurer can hand the role over or step down). Expenses made by other coordinators stay *pending* until the **treasurer** approves/rejects them; the treasurer's own expenses are approved by another coordinator. With no treasurer appointed, any coordinator can approve (original behaviour).
+- **Event images.** A coordinator can attach up to 6 images (JPG/PNG/WEBP, 3 MB each) to a special event when creating it or later from *Manage → Edit*, and remove them again from the event page. They are stored in `uploads/` with random names (table `event_images`) and served only to logged-in users through `actions.php?action=view_event_image`. Students see a thumbnail next to the event in *Upcoming deadlines*; tapping it opens the photos, description and a Pay button.
+- **Who did it.** Approvals and changes show the coordinator's name: payment review (`payments.reviewed_by`), expense approve/reject (`approved_by`) and edits (`updated_by`), collection edits/close/reopen (`collections.updated_by`), announcement edits/publish (`announcements.updated_by`). Students see the reviewer on *Payment History*, the approver on *Financial Statement* and the author on announcements. The audit log records every action with the user's name.
 - `events` is merged into `collections` (`kind = 'monthly' | 'event'`); one FK serves payments, reports and reminders.
 - `payments` has `UNIQUE(student_id, collection_id)` and `UNIQUE(reference_no)`. "Unpaid" = no row. A rejected payment is **resubmitted** by updating the same row (`attempt_no + 1`) and adding a new receipt – history of receipts is kept.
 - Payment amount must equal the collection's contribution amount (validated in browser and PHP).
@@ -64,9 +69,13 @@ All are POST + `csrf` token unless marked GET. `return` (optional) = page to go 
 | `change_password` | any | current_password, new_password, confirm_password | M1 |
 | `add_student` | coord | full_name, reg_no, email, contact_no, district, password (blank = generate) | M1 |
 | `update_student` | coord | student_id + same fields | M1 |
-| `toggle_student` / `reset_password` / `delete_student` | coord | student_id | M1 |
+| `toggle_student` / `reset_password` / `delete_student` | coord | student_id (refused for coordinator accounts) | M1 |
+| `promote_coordinator` / `demote_coordinator` | coord | student_id (cannot demote yourself) | M1 |
+| `set_treasurer` / `clear_treasurer` | coord | user_id (only the current treasurer may reassign / step down) | M4 |
 | `create_collection` | coord | title, description, amount, collection_month (YYYY-MM), deadline | M2 |
-| `create_event` | coord | title, description, amount, target_amount?, event_date?, deadline | M2 |
+| `create_event` | coord | title, description, amount, target_amount?, event_date?, deadline, images[]? (multipart) | M2 |
+| `delete_event_image` | coord | image_id | M2 |
+| `view_event_image` (GET) | any | id = image_id | M2 |
 | `update_collection` | coord | collection_id + fields | M2 |
 | `close_collection` / `reopen_collection` | coord | collection_id | M2 |
 | `submit_payment` | student | collection_id, amount, reference_no, receipt (file) – also used for resubmission | M3 |
@@ -74,7 +83,7 @@ All are POST + `csrf` token unless marked GET. `return` (optional) = page to go 
 | `reject_payment` | coord | payment_id, reason | M3 |
 | `download_receipt` (GET) | any (students: own only) | id = receipt_id | M3 |
 | `add_expense` / `update_expense` | coord | title, description, category, amount, expense_date, collection_id?, document (file)?, doc_public? (+expense_id) | M4 |
-| `approve_expense` / `reject_expense` / `delete_expense` | coord | expense_id | M4 |
+| `approve_expense` / `reject_expense` / `delete_expense` | coord (approve/reject: treasurer rules apply) | expense_id | M4 |
 | `delete_expense_doc` | coord | document_id | M4 |
 | `download_expense_doc` (GET) | any (students: public + approved only) | id = document_id | M4 |
 | `export_csv` (GET) | coord | type = payments / expenses / collections, from?, to?, collection_id? | M4 |
@@ -108,3 +117,4 @@ All are POST + `csrf` token unless marked GET. `return` (optional) = page to go 
 8. **Reminders**: send an individual and a bulk reminder, then check the Email Log (failures show the SMTP error).
 9. **Announcements**: create a draft, publish it, view it as a student; check the notification.
 10. **Privacy**: as student A, edit the URL `actions.php?action=download_receipt&id=<receipt of student B>` → 403.
+11. **Multiple coordinators**: as coordinator A open a student → *Make coordinator*; log in as that student and confirm both panels work (account menu → *Switch to …*). As the new coordinator approve a payment/expense and edit a collection, then check that the name appears on *Payments*, *Expenses*, *Collection Details* and in the student's *Payment History*. Try to approve your own payment (refused), demote yourself (refused), then demote the new coordinator from A's account.

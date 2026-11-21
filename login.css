@@ -63,6 +63,7 @@
   border-radius: 8px;
   box-shadow: 0 12px 40px rgba(16, 24, 40, .14);
   padding: 24px 32px;
+  min-height: 350px;             /* taller card */
   position: relative;
   display: grid;
   grid-template-columns: 1fr 1fr;
