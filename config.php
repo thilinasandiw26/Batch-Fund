@@ -1,9 +1,9 @@
 <?php
 define('DB_HOST', '127.0.0.1');
-define('DB_PORT', '8889');
+define('DB_PORT', '3306');
 define('DB_NAME', 'batchfund');
 define('DB_USER', 'root');
-define('DB_PASS', 'root');
+define('DB_PASS', '');
 
 define('APP_NAME', 'BatchFund');
 define('BATCH_NAME', 'Batch Fund Management System');
